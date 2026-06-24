@@ -2,7 +2,6 @@ import { useState, useRef, useEffect } from "react";
 import ReactPlayer from "react-player";
 import { useSocketStore } from "../store/useSocketStore";
 import { useAudioStore } from "../store/useAudioStore";
-import { Link as LinkIcon } from "lucide-react";
 
 interface VideoPlayerProps {
   roomId: string;
@@ -15,7 +14,6 @@ export default function VideoPlayer({ roomId, isFullscreen = false }: VideoPlaye
   const [inputUrl, setInputUrl] = useState("");
   const [playing, setPlaying] = useState(false);
   const [volume, setVolume] = useState(0.8);
-  const [muted, setMuted] = useState(false);
   
   const playerRef = useRef<ReactPlayer>(null);
   const isHandlingRemote = useRef(false);
@@ -106,6 +104,16 @@ export default function VideoPlayer({ roomId, isFullscreen = false }: VideoPlaye
       setTimeout(() => { isHandlingRemote.current = false; }, 500);
     });
 
+    socket.on("video_state", ({ playing, time, url: newUrl }) => {
+        isHandlingRemote.current = true;
+        setPlaying(playing);
+        if (newUrl !== url) setUrl(newUrl);
+        if (playerRef.current) {
+          if (typeof playerRef.current.seekTo === 'function') playerRef.current.seekTo(time, "seconds");
+        }
+        setTimeout(() => { isHandlingRemote.current = false; }, 500);
+      });
+
     socket.on("seek_video", ({ time }) => {
       isHandlingRemote.current = true;
       if (playerRef.current) {
@@ -144,7 +152,7 @@ export default function VideoPlayer({ roomId, isFullscreen = false }: VideoPlaye
     socket?.emit("pause_video", { roomId, time });
   };
 
-  const handleProgress = (state: any) => {
+  const handleProgress = () => {
     // Implement drift correction here if needed
   };
 
@@ -203,7 +211,6 @@ export default function VideoPlayer({ roomId, isFullscreen = false }: VideoPlaye
           height="100%"
           playing={playing}
           volume={volume}
-          muted={muted}
           onPlay={handlePlay}
           onPause={handlePause}
           onProgress={handleProgress}

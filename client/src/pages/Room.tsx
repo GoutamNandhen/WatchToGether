@@ -7,7 +7,7 @@ import VideoGrid from "../components/VideoGrid";
 import { useWebRTC } from "../hooks/useWebRTC";
 import { useVoiceActivityDetection } from "../hooks/useVoiceActivityDetection";
 import { useAudioStore } from "../store/useAudioStore";
-import { Copy, Check, Settings, Mic2, MessageSquare, Users, ChevronRight, Maximize, Minimize, Share2 } from "lucide-react";
+import { Settings, Mic2, MessageSquare, Users, ChevronRight, Share2 } from "lucide-react";
 import api from "../lib/api";
 import AudioSettingsModal from "../components/AudioSettingsModal";
 import InviteModal from "../components/InviteModal";
@@ -29,10 +29,8 @@ export default function Room() {
   const [isChatOpen, setIsChatOpen] = useState(false);
   const [hoverZones, setHoverZones] = useState({ top: false, right: false, bottom: false });
   const [isCameraSidebarOpen, setIsCameraSidebarOpen] = useState(true);
-  const [isIdle, setIsIdle] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [duration, setDuration] = useState("00:00:00");
-  const idleTimer = useRef<NodeJS.Timeout | null>(null);
   const videoContainerRef = useRef<HTMLDivElement>(null);
   const mainContainerRef = useRef<HTMLDivElement>(null);
 
@@ -45,7 +43,7 @@ export default function Room() {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         setIsFullscreen(false);
-      } else if (e.key.toLowerCase() === 'f' && e.target?.nodeName !== 'INPUT' && e.target?.nodeName !== 'TEXTAREA') {
+      } else if (e.key.toLowerCase() === 'f' && (e.target as Node)?.nodeName !== 'INPUT' && (e.target as Node)?.nodeName !== 'TEXTAREA') {
         toggleFullscreen();
       }
     };
@@ -345,7 +343,6 @@ export default function Room() {
               isFullscreen={isFullscreen}
               floating={true}
               isBottomHovered={hoverZones.bottom}
-              onMouseEnterBottom={handleMouseEnterBottom}
               onMouseLeaveBottom={handleMouseLeaveBottom}
               isHost={isHost}
               roomId={id}

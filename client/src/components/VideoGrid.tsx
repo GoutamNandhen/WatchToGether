@@ -69,16 +69,13 @@ interface VideoGridProps {
   isFullscreen?: boolean;
   floating?: boolean;
   isBottomHovered?: boolean;
-  onMouseEnterBottom?: () => void;
   onMouseLeaveBottom?: () => void;
-  isIdle?: boolean;
   isHost?: boolean;
   roomId?: string;
   screenShares?: Record<string, string>;
-  onMouseMove?: () => void;
 }
 
-export default function VideoGrid({ localStream, screenStream, peers, peerStatuses = {}, screenShares = {}, toggleAudio, toggleVideo, shareScreen, toggleFullscreen, isFullscreen = false, floating = false, isBottomHovered = false, onMouseEnterBottom, onMouseLeaveBottom, isIdle = false, onMouseMove, isHost = false, roomId }: VideoGridProps) {
+export default function VideoGrid({ localStream, screenStream, peers, peerStatuses = {}, screenShares = {}, toggleAudio, toggleVideo, shareScreen, toggleFullscreen, isFullscreen = false, floating = false, isBottomHovered = false, onMouseLeaveBottom, isHost = false, roomId }: VideoGridProps) {
   const [audioEnabled, setAudioEnabled] = useState(true);
   const [videoEnabled, setVideoEnabled] = useState(true);
   const [isCircle, setIsCircle] = useState(false);
