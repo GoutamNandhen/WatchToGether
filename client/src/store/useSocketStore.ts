@@ -29,7 +29,8 @@ export const useSocketStore = create<SocketState>((set, get) => ({
   
   connect: () => {
     if (!get().socket) {
-      const socket = io('http://localhost:5000');
+      const url = import.meta.env.VITE_API_URL || 'http://localhost:5000';
+      const socket = io(url);
       
       socket.on('receive_message', (message: Message) => {
         set((state) => ({ messages: [...state.messages, message] }));
