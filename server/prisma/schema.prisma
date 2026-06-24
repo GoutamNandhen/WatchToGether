@@ -1,0 +1,90 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id            String        @id @default(uuid())
+  email         String        @unique
+  passwordHash  String
+  name          String
+  avatar        String?
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  createdRooms  Room[]        @relation("HostRooms")
+  participants  Participant[]
+  coHostedRooms RoomCoHost[]
+  messages      Message[]
+
+  friends       Friend[]      @relation("UserFriends")
+  friendOf      Friend[]      @relation("FriendUsers")
+}
+
+model Room {
+  id              String        @id @default(uuid())
+  name            String
+  description     String?
+  isPrivate       Boolean       @default(false)
+  password        String?
+  maxParticipants Int           @default(10)
+  hostId          String
+  host            User          @relation("HostRooms", fields: [hostId], references: [id])
+  createdAt       DateTime      @default(now())
+  
+  participants    Participant[]
+  coHosts         RoomCoHost[]
+  messages        Message[]
+}
+
+model RoomCoHost {
+  id            String        @id @default(uuid())
+  roomId        String
+  userId        String
+  createdAt     DateTime      @default(now())
+
+  room          Room          @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  user          User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([roomId, userId])
+}
+
+model Participant {
+  id            String        @id @default(uuid())
+  userId        String
+  roomId        String
+  joinedAt      DateTime      @default(now())
+  
+  user          User          @relation(fields: [userId], references: [id])
+  room          Room          @relation(fields: [roomId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, roomId])
+}
+
+model Message {
+  id            String        @id @default(uuid())
+  content       String
+  userId        String
+  roomId        String
+  createdAt     DateTime      @default(now())
+  
+  user          User          @relation(fields: [userId], references: [id])
+  room          Room          @relation(fields: [roomId], references: [id], onDelete: Cascade)
+}
+
+model Friend {
+  id            String        @id @default(uuid())
+  userId        String
+  friendId      String
+  status        String        @default("PENDING") // PENDING, ACCEPTED, BLOCKED
+  createdAt     DateTime      @default(now())
+
+  user          User          @relation("UserFriends", fields: [userId], references: [id])
+  friendUser    User          @relation("FriendUsers", fields: [friendId], references: [id])
+
+  @@unique([userId, friendId])
+}
