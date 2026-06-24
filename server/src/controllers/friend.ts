@@ -91,7 +91,7 @@ export const sendFriendRequest = async (req: AuthRequest, res: Response): Promis
 
 export const acceptFriendRequest = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
-    const { id } = req.params;
+    const id = req.params.id as string;
     const userId = req.userId!;
 
     const friend = await prisma.friend.findUnique({ where: { id } });
