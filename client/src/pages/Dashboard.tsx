@@ -2,17 +2,8 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import api from "../lib/api";
 import { useAuthStore } from "../store/useAuthStore";
-import { LogOut, Trash2, Users, MonitorPlay, UserPlus, Check } from "lucide-react";
-
-interface Room {
-  id: string;
-  name: string;
-  description: string;
-  _count: { participants: number };
-  host: { name: string };
-  hostId: string;
-}
-
+import { useSocketStore } from "../store/useSocketStore";
+import { LogOut, Users, MonitorPlay, UserPlus, Check } from "lucide-react";
 interface Friend {
   id: string;
   status: 'PENDING' | 'ACCEPTED';
@@ -25,22 +16,49 @@ interface Friend {
 }
 
 export default function Dashboard() {
-  const [rooms, setRooms] = useState<Room[]>([]);
   const [friends, setFriends] = useState<Friend[]>([]);
   const [roomName, setRoomName] = useState("");
+  const [createPassword, setCreatePassword] = useState("");
+  const [joinRoomId, setJoinRoomId] = useState("");
+  const [joinPassword, setJoinPassword] = useState("");
   const [friendEmail, setFriendEmail] = useState("");
   const [activeTab, setActiveTab] = useState<'rooms' | 'friends'>('rooms');
   const { user, logout } = useAuthStore();
+  const { socket, connect } = useSocketStore();
   const navigate = useNavigate();
+
+  useEffect(() => {
+    if ("Notification" in window && Notification.permission === "default") {
+      Notification.requestPermission();
+    }
+  }, []);
 
   useEffect(() => {
     if (!user) {
       navigate("/login");
       return;
     }
-    fetchRooms();
     fetchFriends();
+    connect();
   }, [user]);
+
+  useEffect(() => {
+    if (!socket || !user) return;
+
+    // Join a global room for personal notifications
+    socket.emit("join_global_room", { userId: user.id });
+
+    const handleNotification = (data: { title: string, body: string }) => {
+      if ("Notification" in window && Notification.permission === "granted") {
+        new Notification(data.title, { body: data.body, icon: "/vite.svg" });
+      }
+    };
+
+    socket.on("notification", handleNotification);
+    return () => {
+      socket.off("notification", handleNotification);
+    };
+  }, [socket, user]);
 
   const fetchFriends = async () => {
     try {
@@ -51,33 +69,27 @@ export default function Dashboard() {
     }
   };
 
-  const fetchRooms = async () => {
-    try {
-      const res = await api.get("/rooms");
-      setRooms(res.data.rooms);
-    } catch (error) {
-      console.error("Failed to fetch rooms:", error);
-    }
-  };
-
   const handleCreateRoom = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!roomName.trim()) return;
+    if (!roomName.trim() || !createPassword.trim()) return;
     try {
-      const res = await api.post("/rooms", { name: roomName, isPrivate: false });
+      const res = await api.post("/rooms", { name: roomName, password: createPassword, isPrivate: true });
       navigate(`/room/${res.data.room.id}`);
     } catch (error) {
       console.error("Failed to create room:", error);
+      alert("Failed to create room.");
     }
   };
 
-  const handleDeleteRoom = async (roomId: string) => {
-    if (!confirm("Are you sure you want to delete this room?")) return;
+  const handleJoinRoom = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!joinRoomId.trim() || !joinPassword.trim()) return;
     try {
-      await api.delete(`/rooms/${roomId}`);
-      setRooms(rooms.filter(r => r.id !== roomId));
-    } catch (error) {
-      console.error("Failed to delete room:", error);
+      const res = await api.post("/rooms/join", { roomId: joinRoomId, password: joinPassword });
+      navigate(`/room/${res.data.room.id}`);
+    } catch (error: any) {
+      console.error("Failed to join room:", error);
+      alert(error.response?.data?.error || "Failed to join room. Check ID and password.");
     }
   };
 
@@ -111,8 +123,8 @@ export default function Dashboard() {
   if (!user) return null;
 
   return (
-    <div className="min-h-screen p-8 max-w-6xl mx-auto">
-      <div className="flex justify-between items-center mb-8">
+    <div className="min-h-screen p-4 md:p-8 max-w-6xl mx-auto">
+      <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-8 gap-4">
         <div>
           <h1 className="text-3xl font-bold">Dashboard</h1>
           <p className="text-slate-400">Welcome back, {user.name}</p>
@@ -150,7 +162,16 @@ export default function Dashboard() {
                   value={roomName}
                   onChange={(e) => setRoomName(e.target.value)}
                   placeholder="Room Name" 
+                  className="w-full bg-slate-950 border border-slate-800 rounded-lg px-4 py-2 text-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 mb-3" 
+                  required
+                />
+                <input 
+                  type="password" 
+                  value={createPassword}
+                  onChange={(e) => setCreatePassword(e.target.value)}
+                  placeholder="Room Password" 
                   className="w-full bg-slate-950 border border-slate-800 rounded-lg px-4 py-2 text-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 mb-4" 
+                  required
                 />
                 <button type="submit" className="w-full bg-indigo-600 hover:bg-indigo-500 py-2 rounded-lg font-medium transition-colors">
                   Create New Room
@@ -181,40 +202,37 @@ export default function Dashboard() {
         <div className="md:col-span-2 bg-slate-900 border border-slate-800 p-6 rounded-2xl">
           {activeTab === 'rooms' ? (
             <>
-              <h2 className="text-xl font-semibold mb-4">Active Public Rooms</h2>
-              {rooms.length === 0 ? (
-                <div className="text-slate-400 text-sm flex items-center justify-center h-32 border border-dashed border-slate-800 rounded-lg">
-                  No active rooms right now. Create one!
-                </div>
-              ) : (
-                <div className="space-y-4">
-                  {rooms.map((room) => (
-                    <div key={room.id} className="flex items-center justify-between bg-slate-950 p-4 rounded-xl border border-slate-800 hover:border-slate-700 transition-colors">
-                      <div>
-                        <h3 className="font-semibold text-lg">{room.name}</h3>
-                        <p className="text-sm text-slate-400">Hosted by {room.host.name} • {room._count.participants} watching</p>
-                      </div>
-                      <div className="flex gap-2">
-                        {user.id === room.hostId && (
-                          <button 
-                            onClick={() => handleDeleteRoom(room.id)}
-                            className="p-2 text-slate-500 hover:text-red-500 hover:bg-red-500/10 rounded-lg transition-colors"
-                            title="Delete Room"
-                          >
-                            <Trash2 size={18} />
-                          </button>
-                        )}
-                        <button 
-                          onClick={() => navigate(`/room/${room.id}`)}
-                          className="px-6 py-2 bg-slate-800 hover:bg-indigo-600 rounded-lg font-medium transition-colors"
-                        >
-                          Join
-                        </button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
+              <h2 className="text-xl font-semibold mb-4">Join Room</h2>
+              <div className="bg-slate-950 border border-slate-800 p-6 rounded-xl max-w-md mx-auto mt-8">
+                <p className="text-slate-400 mb-6 text-center text-sm">Enter a Room ID and Password to join a private watch party.</p>
+                <form onSubmit={handleJoinRoom} className="space-y-4">
+                  <div>
+                    <label className="block text-sm font-medium text-slate-400 mb-1">Room ID</label>
+                    <input 
+                      type="text" 
+                      value={joinRoomId}
+                      onChange={(e) => setJoinRoomId(e.target.value)}
+                      placeholder="e.g. c7f4fa11-..." 
+                      className="w-full bg-slate-900 border border-slate-700 rounded-lg px-4 py-3 text-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500" 
+                      required
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-slate-400 mb-1">Password</label>
+                    <input 
+                      type="password" 
+                      value={joinPassword}
+                      onChange={(e) => setJoinPassword(e.target.value)}
+                      placeholder="••••••••" 
+                      className="w-full bg-slate-900 border border-slate-700 rounded-lg px-4 py-3 text-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500" 
+                      required
+                    />
+                  </div>
+                  <button type="submit" className="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-medium py-3 rounded-lg transition-colors mt-2">
+                    Join Room
+                  </button>
+                </form>
+              </div>
             </>
           ) : (
             <>

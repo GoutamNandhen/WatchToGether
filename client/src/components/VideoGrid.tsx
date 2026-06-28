@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Mic, MicOff, Video, VideoOff, MonitorUp, Move, Circle, Square, Pin, PinOff, List, LayoutGrid, Maximize, Minimize, Crown } from "lucide-react";
+import { Mic, MicOff, Video, VideoOff, MonitorUp, Move, Circle, Square, Pin, PinOff, List, LayoutGrid, Maximize, Minimize, Crown, WifiOff, Wifi } from "lucide-react";
 import { Rnd } from "react-rnd";
 
 import { useAudioStore } from "../store/useAudioStore";
@@ -13,9 +13,10 @@ interface VideoPlayerProps {
   isCircle?: boolean;
   isMicOn?: boolean;
   isPinned?: boolean;
+  dataSaver?: boolean;
 }
 
-function StreamPlayer({ stream, isLocal, muted = false, isActiveSpeaker = false, isCircle = false, isMicOn = true, isPinned = false }: VideoPlayerProps) {
+function StreamPlayer({ stream, isLocal, muted = false, isActiveSpeaker = false, isCircle = false, isMicOn = true, isPinned = false, dataSaver = false }: VideoPlayerProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
 
   useEffect(() => {
@@ -26,13 +27,22 @@ function StreamPlayer({ stream, isLocal, muted = false, isActiveSpeaker = false,
 
   return (
     <div className={`relative overflow-hidden bg-slate-900 w-full h-full shadow-lg transition-all duration-300 ${isCircle ? 'rounded-full aspect-square' : 'rounded-xl aspect-video'} ${isActiveSpeaker ? 'ring-4 ring-green-500 shadow-green-500/20' : 'border border-slate-800'}`}>
-      <video
-        ref={videoRef}
-        autoPlay
-        playsInline
-        muted={isLocal || muted}
-        className={`w-full h-full object-cover ${isLocal ? 'scale-x-[-1]' : ''}`}
-      />
+      {(!dataSaver || isLocal) ? (
+        <video
+          ref={videoRef}
+          autoPlay
+          playsInline
+          muted={isLocal || muted}
+          className={`w-full h-full object-cover ${isLocal ? 'scale-x-[-1]' : ''}`}
+        />
+      ) : (
+        <div className="w-full h-full flex flex-col items-center justify-center bg-slate-800/80">
+          <div className="w-16 h-16 rounded-full bg-slate-700 flex items-center justify-center border-4 border-slate-600 shadow-inner mb-2">
+            <VideoOff size={24} className="text-slate-500" />
+          </div>
+          <span className="text-xs text-slate-400 font-medium tracking-widest uppercase">Data Saver</span>
+        </div>
+      )}
       {isActiveSpeaker && (
         <div className={`absolute ${isCircle ? 'top-4 right-4' : 'top-2 right-2'} bg-green-500 text-white p-1 rounded-full animate-pulse shadow-lg z-20`}>
           <Mic size={14} />
@@ -82,6 +92,7 @@ export default function VideoGrid({ localStream, screenStream, peers, peerStatus
   const [viewMode, setViewMode] = useState<'list' | 'grid'>('grid');
   const [pinnedPeers, setPinnedPeers] = useState<string[]>([]);
   const [maxCameras, setMaxCameras] = useState(2);
+  const [dataSaver, setDataSaver] = useState(false);
   
   const { activeSpeakers } = useAudioStore();
   const { socket } = useSocketStore();
@@ -133,6 +144,9 @@ export default function VideoGrid({ localStream, screenStream, peers, peerStatus
       </button>
       <button onClick={handleToggleVideo} className={`p-2 rounded-lg transition-colors shadow ${videoEnabled ? 'bg-slate-800/80 hover:bg-slate-700 text-white' : 'bg-red-500/80 text-white border border-red-400'}`} title="Toggle Video">
         {videoEnabled ? <Video size={16} /> : <VideoOff size={16} />}
+      </button>
+      <button onClick={() => setDataSaver(!dataSaver)} className={`p-2 rounded-lg transition-colors shadow ${dataSaver ? 'bg-indigo-600 text-white' : 'bg-slate-800/80 hover:bg-slate-700 text-slate-300'}`} title={dataSaver ? "Data Saver: ON" : "Data Saver: OFF"}>
+        {dataSaver ? <WifiOff size={16} /> : <Wifi size={16} />}
       </button>
     </>
   );
@@ -227,7 +241,7 @@ export default function VideoGrid({ localStream, screenStream, peers, peerStatus
               <div className={`drag-handle absolute inset-0 z-30 opacity-0 group-hover/camera:opacity-100 bg-black/40 flex items-center justify-center cursor-move transition-opacity duration-300 ${isCircle ? 'rounded-full' : 'rounded-xl'}`}>
                 <Move className="text-white drop-shadow-lg" size={32} />
               </div>
-              <StreamPlayer stream={s.stream} isLocal={s.isLocal} isActiveSpeaker={s.isActive} isCircle={isCircle} isMicOn={s.isMicOn} isPinned={pinnedPeers.includes(s.id)} />
+              <StreamPlayer stream={s.stream} isLocal={s.isLocal} isActiveSpeaker={s.isActive} isCircle={isCircle} isMicOn={s.isMicOn} isPinned={pinnedPeers.includes(s.id)} dataSaver={dataSaver} />
             </div>
           </Rnd>
         ))}
@@ -286,7 +300,7 @@ export default function VideoGrid({ localStream, screenStream, peers, peerStatus
           <div className="space-y-4">
             {allStreams.map(s => (
               <div key={s.id} className={`${isCircle ? 'aspect-square w-2/3 mx-auto relative group/cam' : 'aspect-video w-full relative group/cam'}`}>
-                <StreamPlayer stream={s.stream} isLocal={s.isLocal} isActiveSpeaker={s.isActive} isCircle={isCircle} isMicOn={s.isMicOn} isPinned={pinnedPeers.includes(s.id)} />
+                <StreamPlayer stream={s.stream} isLocal={s.isLocal} isActiveSpeaker={s.isActive} isCircle={isCircle} isMicOn={s.isMicOn} isPinned={pinnedPeers.includes(s.id)} dataSaver={dataSaver} />
                 {!s.isLocal && isHost && (
                   <button 
                     onClick={() => makeCoHost(s.id)}

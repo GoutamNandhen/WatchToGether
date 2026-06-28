@@ -216,43 +216,49 @@ export function useWebRTC(roomId: string) {
     }
   };
 
+  const broadcastMediaStream = (stream: MediaStream) => {
+    if (screenStreamRef.current) {
+      screenStreamRef.current.getTracks().forEach(t => t.stop());
+    }
+
+    const videoTrack = stream.getVideoTracks()[0];
+    if (!videoTrack) return;
+
+    screenStreamRef.current = stream;
+    setScreenStreamState(stream);
+
+    Object.values(peerConnections.current).forEach((pc) => {
+      pc.addTrack(videoTrack, stream);
+    });
+
+    socket?.emit("screen_share_start", { roomId, streamId: stream.id });
+
+    videoTrack.onended = () => {
+      Object.values(peerConnections.current).forEach((pc) => {
+        const sender = pc.getSenders().find((s) => s.track === videoTrack);
+        if (sender) {
+          pc.removeTrack(sender);
+        }
+      });
+      screenStreamRef.current = null;
+      setScreenStreamState(null);
+      socket?.emit("screen_share_stop", { roomId });
+    };
+  };
+
   const shareScreen = async () => {
     if (screenStreamRef.current) {
-      // Stop sharing
       screenStreamRef.current.getTracks().forEach(t => t.stop());
-      // The onended handler will clean up
       return;
     }
 
     try {
       const screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
-      const screenVideoTrack = screenStream.getVideoTracks()[0];
-
-      screenStreamRef.current = screenStream;
-      setScreenStreamState(screenStream);
-
-      Object.values(peerConnections.current).forEach((pc) => {
-        pc.addTrack(screenVideoTrack, screenStream);
-      });
-
-      socket?.emit("screen_share_start", { roomId, streamId: screenStream.id });
-
-      // When screen share stops, remove the track
-      screenVideoTrack.onended = () => {
-        Object.values(peerConnections.current).forEach((pc) => {
-          const sender = pc.getSenders().find((s) => s.track === screenVideoTrack);
-          if (sender) {
-            pc.removeTrack(sender);
-          }
-        });
-        screenStreamRef.current = null;
-        setScreenStreamState(null);
-        socket?.emit("screen_share_stop", { roomId });
-      };
+      broadcastMediaStream(screenStream);
     } catch (err) {
       console.error("Error sharing screen:", err);
     }
   };
 
-  return { getLocalStream, localStream, localStreamState, screenStreamState, peers, peerStatuses, screenShares, toggleVideo, toggleAudio, shareScreen };
+  return { getLocalStream, localStream, localStreamState, screenStreamState, peers, peerStatuses, screenShares, toggleAudio, toggleVideo, shareScreen, broadcastMediaStream };
 }

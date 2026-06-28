@@ -51,9 +51,16 @@ export const getRoomById = async (req: AuthRequest, res: Response): Promise<void
     const id = req.params.id as string;
     const room = await prisma.room.findUnique({
       where: { id },
-      include: { 
+      select: {
+        id: true,
+        name: true,
+        description: true,
+        isPrivate: true,
+        maxParticipants: true,
+        hostId: true,
+        createdAt: true,
         host: { select: { name: true } },
-        coHosts: true 
+        coHosts: true
       }
     });
 
@@ -141,9 +148,48 @@ export const inviteRoom = async (req: AuthRequest, res: Response): Promise<void>
       `
     });
 
+    const targetUser = await prisma.user.findUnique({ where: { email } });
+    if (targetUser) {
+      const io = req.app.get("io");
+      if (io) {
+        io.to(`user_${targetUser.id}`).emit("notification", {
+          title: "Room Invitation",
+          body: `${user.name} invited you to join "${room.name}"!`
+        });
+      }
+    }
+
     res.status(200).json({ message: "Invitation sent successfully" });
   } catch (error) {
     console.error("Invite Room Error:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+};
+
+export const joinRoom = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const { roomId, password } = req.body;
+    
+    if (!roomId) {
+      res.status(400).json({ error: "Room ID is required" });
+      return;
+    }
+
+    const room = await prisma.room.findUnique({ where: { id: roomId } });
+
+    if (!room) {
+      res.status(404).json({ error: "Room not found" });
+      return;
+    }
+
+    if (room.password && room.password !== password && room.hostId !== req.userId) {
+      res.status(401).json({ error: "Incorrect password" });
+      return;
+    }
+
+    res.status(200).json({ message: "Joined successfully", room: { id: room.id, name: room.name } });
+  } catch (error) {
+    console.error("Join Room Error:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 };

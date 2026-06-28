@@ -7,10 +7,11 @@ import VideoGrid from "../components/VideoGrid";
 import { useWebRTC } from "../hooks/useWebRTC";
 import { useVoiceActivityDetection } from "../hooks/useVoiceActivityDetection";
 import { useAudioStore } from "../store/useAudioStore";
-import { Settings, Mic2, MessageSquare, Users, ChevronRight, Share2 } from "lucide-react";
+import { Settings, Mic2, MessageSquare, Users, ChevronRight, Share2, Clock } from "lucide-react";
 import api from "../lib/api";
 import AudioSettingsModal from "../components/AudioSettingsModal";
 import InviteModal from "../components/InviteModal";
+import { VideoPlayerRef } from "../components/VideoPlayer";
 
 export default function Room() {
   const { id } = useParams();
@@ -20,7 +21,7 @@ export default function Room() {
   const { socket, connect, disconnect, joinRoom, leaveRoom, sendMessage, messages, clearMessages } = useSocketStore();
   const [chatInput, setChatInput] = useState("");
   const chatRef = useRef<HTMLDivElement>(null);
-  const { getLocalStream, localStream, localStreamState, screenStreamState, peers, peerStatuses, screenShares, toggleAudio, toggleVideo, shareScreen } = useWebRTC(id || "");
+  const { getLocalStream, localStream, localStreamState, screenStreamState, peers, peerStatuses, screenShares, toggleAudio, toggleVideo, shareScreen, broadcastMediaStream } = useWebRTC(id || "");
   const [isInviteModalOpen, setIsInviteModalOpen] = useState(false);
   const [mainScreenSource, setMainScreenSource] = useState<'url' | string>('url');
   const [roomCreatedAt, setRoomCreatedAt] = useState<string | null>(null);
@@ -33,6 +34,61 @@ export default function Room() {
   const [duration, setDuration] = useState("00:00:00");
   const videoContainerRef = useRef<HTMLDivElement>(null);
   const mainContainerRef = useRef<HTMLDivElement>(null);
+  const videoPlayerRef = useRef<VideoPlayerRef>(null);
+
+  const insertTimestamp = () => {
+    if (!videoPlayerRef.current) return;
+    const currentSeconds = Math.floor(videoPlayerRef.current.getCurrentTime());
+    const h = Math.floor(currentSeconds / 3600);
+    const m = Math.floor((currentSeconds % 3600) / 60);
+    const s = currentSeconds % 60;
+    
+    let timeStr = "";
+    if (h > 0) {
+      timeStr = `${h}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+    } else {
+      timeStr = `${m}:${s.toString().padStart(2, '0')}`;
+    }
+    
+    setChatInput(prev => `${prev} [Time: ${timeStr}] `);
+  };
+
+  const handleSeekToTime = (timeStr: string) => {
+    if (!isHost) return;
+    const parts = timeStr.split(':').map(Number);
+    let seconds = 0;
+    if (parts.length === 3) {
+      seconds = parts[0] * 3600 + parts[1] * 60 + parts[2];
+    } else {
+      seconds = parts[0] * 60 + parts[1];
+    }
+    socket?.emit("seek_video", { roomId: id, time: seconds });
+    socket?.emit("play_video", { roomId: id, time: seconds });
+    videoPlayerRef.current?.seekTo(seconds);
+  };
+
+  const parseMessageContent = (content: string) => {
+    const timeRegex = /\[Time:\s*(\d{1,2}:\d{2}(?::\d{2})?)\]/g;
+    const parts = content.split(timeRegex);
+    
+    if (parts.length === 1) return content;
+    
+    return parts.map((part, i) => {
+      if (i % 2 === 1) { // It's the timeMatch
+        return (
+          <button 
+            key={i} 
+            onClick={() => handleSeekToTime(part)} 
+            className="text-indigo-300 hover:text-indigo-200 font-mono underline mx-1 hover:bg-white/10 px-1 rounded transition-colors"
+            title={isHost ? "Jump to time" : "Only the host can seek the video"}
+          >
+            {part}
+          </button>
+        );
+      }
+      return <span key={i}>{part}</span>;
+    });
+  };
 
   useEffect(() => {
     const handleFullscreenChange = () => {
@@ -180,13 +236,30 @@ export default function Room() {
       setHostAnnouncement(false);
     });
 
+    socket.on("screen_share_start", ({ streamId }) => {
+      setMainScreenSource(streamId);
+    });
+
+    socket.on("screen_share_stop", () => {
+      setMainScreenSource('url');
+    });
+
+    socket.on("new_cohost", ({ userId }) => {
+      if (user && user.id === userId) {
+        setIsHost(true);
+      }
+    });
+
     return () => {
       socket.off("user_speaking");
       socket.off("user_stopped_speaking");
       socket.off("host_announcement_start");
       socket.off("host_announcement_stop");
+      socket.off("screen_share_start");
+      socket.off("screen_share_stop");
+      socket.off("new_cohost");
     };
-  }, [socket, addActiveSpeaker, removeActiveSpeaker, setHostAnnouncement]);
+  }, [socket, addActiveSpeaker, removeActiveSpeaker, setHostAnnouncement, user]);
 
   useEffect(() => {
     if (chatRef.current) {
@@ -238,7 +311,7 @@ export default function Room() {
 
           {/* Top Edge Overlay Area */}
           <div 
-            className={`absolute top-0 left-0 right-0 h-32 z-[9000] transition-opacity duration-300 ${hoverZones.top ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none'}`}
+            className={`absolute top-0 left-0 right-0 h-32 z-[9000] transition-opacity duration-300 ${hoverZones.top ? 'opacity-100 pointer-events-auto' : 'opacity-0 md:pointer-events-none max-md:opacity-100 max-md:pointer-events-auto max-md:h-16'}`}
             onMouseLeave={() => setHoverZones(p => ({ ...p, top: false }))}
           >
             {/* Main Screen Selection Dropdown */}
@@ -266,7 +339,7 @@ export default function Room() {
 
           {/* Main Screen Renderer */}
           {mainScreenSource === 'url' ? (
-            id ? <VideoPlayer roomId={id} isFullscreen={isFullscreen} /> : null
+            id ? <VideoPlayer ref={videoPlayerRef} roomId={id} isFullscreen={isFullscreen} isHost={isHost} broadcastMediaStream={broadcastMediaStream} /> : null
           ) : (
             (() => {
               const streamToRender = [
@@ -277,13 +350,17 @@ export default function Room() {
               if (!streamToRender) {
                 // Fallback to URL if stream was closed
                 setMainScreenSource('url');
-                return id ? <VideoPlayer roomId={id} isFullscreen={isFullscreen} /> : null;
+                return id ? <VideoPlayer ref={videoPlayerRef} roomId={id} isFullscreen={isFullscreen} isHost={isHost} broadcastMediaStream={broadcastMediaStream} /> : null;
               }
 
               return (
                 <div className={`w-full h-full flex items-center justify-center bg-black ${isFullscreen ? '' : 'p-4'}`}>
                   <video 
-                    ref={el => { if (el && streamToRender) el.srcObject = streamToRender; }}
+                    ref={el => { 
+                      if (el && streamToRender && el.srcObject !== streamToRender) {
+                        el.srcObject = streamToRender; 
+                      }
+                    }}
                     autoPlay 
                     playsInline 
                     className={`max-w-full max-h-full object-contain ${isFullscreen ? '' : 'rounded-xl shadow-2xl border border-slate-800'}`}
@@ -295,7 +372,7 @@ export default function Room() {
 
           {/* Right Edge Overlay Area */}
           <div 
-            className={`absolute top-0 right-0 bottom-0 w-32 z-[9000] flex flex-col items-end justify-center pr-4 transition-opacity duration-300 ${hoverZones.right ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none'}`}
+            className={`absolute top-0 right-0 bottom-0 w-32 z-[9000] flex flex-col items-end justify-center pr-4 transition-opacity duration-300 ${hoverZones.right ? 'opacity-100 pointer-events-auto' : 'opacity-0 md:pointer-events-none max-md:opacity-100 max-md:pointer-events-auto max-md:w-16'}`}
             onMouseLeave={() => setHoverZones(p => ({ ...p, right: false }))}
           >
             <div className="flex flex-col gap-2">
@@ -353,7 +430,7 @@ export default function Room() {
       
       {/* Camera Sidebar */}
       {isCameraSidebarOpen && (
-        <div className="w-64 h-full bg-slate-900 border-l border-slate-800 flex flex-col shadow-2xl relative z-10 animate-in slide-in-from-right-8 duration-300">
+        <div className="fixed md:relative right-0 w-full md:w-64 h-full bg-slate-900 border-l border-slate-800 flex flex-col shadow-2xl z-[9999] md:z-10 animate-in slide-in-from-right-8 duration-300">
           <div className="p-3 border-b border-slate-800 flex justify-between items-center bg-slate-950">
             <span className="font-semibold text-slate-200 text-sm flex items-center gap-2"><Users size={16}/> Cameras</span>
             <button onClick={() => setIsCameraSidebarOpen(false)} className="text-slate-400 hover:text-white p-1 rounded hover:bg-slate-800 transition-colors">
@@ -384,7 +461,7 @@ export default function Room() {
 
       {/* Live Chat Sidebar */}
       {isChatOpen && (
-        <div className="w-80 h-full bg-slate-950 border-l border-slate-900 flex flex-col shadow-2xl relative z-20 animate-in slide-in-from-right-8 duration-300">
+        <div className="fixed md:relative right-0 w-full md:w-80 h-full bg-slate-950 border-l border-slate-900 flex flex-col shadow-2xl z-[9999] md:z-20 animate-in slide-in-from-right-8 duration-300">
           <div className="p-4 border-b border-slate-900 font-semibold flex flex-col gap-2 bg-slate-900/50">
             <div className="flex justify-between items-center">
               <span className="flex items-center gap-2"><MessageSquare size={16}/> Live Chat</span>
@@ -422,7 +499,7 @@ export default function Room() {
                 <div key={idx} className={`flex flex-col ${isMe ? 'items-end' : 'items-start'}`}>
                   <span className="text-xs text-slate-500 mb-1">{isMe ? 'You' : msg.userName}</span>
                   <div className={`px-3 py-2 rounded-2xl max-w-[85%] text-sm ${isMe ? 'bg-indigo-600 text-white rounded-br-none' : 'bg-slate-800 text-slate-200 rounded-bl-none'}`}>
-                    {msg.content}
+                    {parseMessageContent(msg.content)}
                   </div>
                 </div>
               );
@@ -438,6 +515,14 @@ export default function Room() {
                 placeholder="Type a message..." 
                 className="flex-1 bg-slate-950 border border-slate-800 rounded-full px-4 py-2 text-sm text-slate-200 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition-all" 
               />
+              <button 
+                type="button" 
+                onClick={insertTimestamp}
+                className="bg-slate-800 hover:bg-slate-700 text-slate-300 p-2 rounded-full transition-colors flex items-center justify-center border border-slate-700"
+                title="Insert Video Timestamp"
+              >
+                <Clock size={16} />
+              </button>
             </form>
           </div>
         </div>

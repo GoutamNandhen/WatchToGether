@@ -22,6 +22,8 @@ const io = new Server(httpServer, {
 app.use(cors());
 app.use(express.json());
 
+app.set("io", io);
+
 // Routes
 app.use("/api/auth", authRoutes);
 app.use("/api/rooms", roomRoutes);

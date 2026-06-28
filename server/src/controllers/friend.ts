@@ -82,6 +82,15 @@ export const sendFriendRequest = async (req: AuthRequest, res: Response): Promis
       }
     });
 
+    const senderUser = await prisma.user.findUnique({ where: { id: userId } });
+    const io = req.app.get("io");
+    if (io && senderUser) {
+      io.to(`user_${targetUser.id}`).emit("notification", {
+        title: "New Friend Request",
+        body: `${senderUser.name} sent you a friend request!`
+      });
+    }
+
     res.status(201).json({ message: "Friend request sent", friend });
   } catch (error) {
     console.error("Send Request Error:", error);
@@ -104,6 +113,16 @@ export const acceptFriendRequest = async (req: AuthRequest, res: Response): Prom
       where: { id },
       data: { status: "ACCEPTED" }
     });
+
+    const targetUser = await prisma.user.findUnique({ where: { id: friend.userId } });
+    const accepterUser = await prisma.user.findUnique({ where: { id: userId } });
+    const io = req.app.get("io");
+    if (io && accepterUser) {
+      io.to(`user_${friend.userId}`).emit("notification", {
+        title: "Friend Request Accepted",
+        body: `${accepterUser.name} accepted your friend request!`
+      });
+    }
 
     res.status(200).json({ message: "Friend request accepted" });
   } catch (error) {

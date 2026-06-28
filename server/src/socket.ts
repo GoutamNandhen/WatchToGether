@@ -7,6 +7,11 @@ export const setupSocketHandlers = (io: Server) => {
   io.on("connection", (socket: Socket) => {
     console.log("A user connected:", socket.id);
 
+    // Join Global Room for Notifications
+    socket.on("join_global_room", ({ userId }) => {
+      socket.join(`user_${userId}`);
+    });
+
     // Join Room
     socket.on("join_room", async ({ roomId, userId, userName }) => {
       socket.join(roomId);
@@ -76,6 +81,14 @@ export const setupSocketHandlers = (io: Server) => {
 
     socket.on("change_video", ({ roomId, url }) => {
       socket.to(roomId).emit("change_video", { url });
+    });
+
+    socket.on("request_sync", ({ roomId }) => {
+      socket.to(roomId).emit("request_sync", { socketId: socket.id });
+    });
+
+    socket.on("sync_response", ({ targetSocketId, time, playing, url }) => {
+      io.to(targetSocketId).emit("sync_response", { time, playing, url });
     });
 
     // WebRTC Signaling
