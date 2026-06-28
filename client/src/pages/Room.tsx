@@ -11,7 +11,7 @@ import { Settings, Mic2, MessageSquare, Users, ChevronRight, Share2, Clock } fro
 import api from "../lib/api";
 import AudioSettingsModal from "../components/AudioSettingsModal";
 import InviteModal from "../components/InviteModal";
-import { VideoPlayerRef } from "../components/VideoPlayer";
+import type { VideoPlayerRef } from "../components/VideoPlayer";
 
 export default function Room() {
   const { id } = useParams();
