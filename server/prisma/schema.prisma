@@ -3,8 +3,9 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DATABASE_URL_UNPOOLED")
 }
 
 model User {
@@ -33,6 +34,7 @@ model Room {
   password        String?
   maxParticipants Int           @default(10)
   hostId          String
+  isActive        Boolean       @default(true)
   host            User          @relation("HostRooms", fields: [hostId], references: [id])
   createdAt       DateTime      @default(now())
   

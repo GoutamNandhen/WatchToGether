@@ -56,12 +56,9 @@ export default function Room() {
   const handleSeekToTime = (timeStr: string) => {
     if (!isHost) return;
     const parts = timeStr.split(':').map(Number);
-    let seconds = 0;
-    if (parts.length === 3) {
-      seconds = parts[0] * 3600 + parts[1] * 60 + parts[2];
-    } else {
-      seconds = parts[0] * 60 + parts[1];
-    }
+    const seconds = parts.length === 3 
+      ? parts[0] * 3600 + parts[1] * 60 + parts[2] 
+      : parts[0] * 60 + parts[1];
     socket?.emit("seek_video", { roomId: id, time: seconds });
     socket?.emit("play_video", { roomId: id, time: seconds });
     videoPlayerRef.current?.seekTo(seconds);
@@ -90,6 +87,30 @@ export default function Room() {
     });
   };
 
+  const toggleFullscreen = async () => {
+    try {
+      if (!document.fullscreenElement) {
+        setIsFullscreen(true);
+        if (videoContainerRef.current) {
+          if (videoContainerRef.current.requestFullscreen) {
+            await videoContainerRef.current.requestFullscreen();
+          } else if ('webkitRequestFullscreen' in videoContainerRef.current) {
+            await (videoContainerRef.current as HTMLDivElement & { webkitRequestFullscreen: () => Promise<void> }).webkitRequestFullscreen();
+          }
+        }
+      } else {
+        setIsFullscreen(false);
+        if (document.exitFullscreen) {
+          await document.exitFullscreen();
+        } else if ('webkitExitFullscreen' in document) {
+          await (document as Document & { webkitExitFullscreen: () => Promise<void> }).webkitExitFullscreen();
+        }
+      }
+    } catch (err) {
+      console.error("Fullscreen error:", err);
+    }
+  };
+
   useEffect(() => {
     const handleFullscreenChange = () => {
       setIsFullscreen(!!document.fullscreenElement);
@@ -113,34 +134,13 @@ export default function Room() {
 
   useEffect(() => {
     if (isFullscreen) {
+      // eslint-disable-next-line
       setIsCameraSidebarOpen(false);
       setIsChatOpen(false);
     }
   }, [isFullscreen]);
 
-  const toggleFullscreen = async () => {
-    try {
-      if (!document.fullscreenElement) {
-        setIsFullscreen(true);
-        if (videoContainerRef.current) {
-          if (videoContainerRef.current.requestFullscreen) {
-            await videoContainerRef.current.requestFullscreen();
-          } else if ((videoContainerRef.current as any).webkitRequestFullscreen) {
-            await ((videoContainerRef.current as any).webkitRequestFullscreen)();
-          }
-        }
-      } else {
-        setIsFullscreen(false);
-        if (document.exitFullscreen) {
-          await document.exitFullscreen();
-        } else if ((document as any).webkitExitFullscreen) {
-          await ((document as any).webkitExitFullscreen)();
-        }
-      }
-    } catch (err) {
-      console.error("Fullscreen error:", err);
-    }
-  };
+
 
   const handleMouseLeaveBottom = () => setHoverZones(p => ({ ...p, bottom: false }));
   const handleMouseEnterBottom = () => setHoverZones(p => ({ ...p, bottom: true }));
@@ -153,7 +153,7 @@ export default function Room() {
           if (user) {
             if (res.data.room.hostId === user.id) {
               setIsHost(true);
-            } else if (res.data.room.coHosts?.some((ch: any) => ch.userId === user.id)) {
+            } else if (res.data.room.coHosts?.some((ch: { userId: string }) => ch.userId === user.id)) {
               setIsHost(true); // Co-hosts get host privileges
             }
           }
@@ -171,9 +171,27 @@ export default function Room() {
       }
     };
 
+    const handleRoomState = ({ hostId, coHosts }: { hostId: string, coHosts: string[] }) => {
+      if (hostId === user.id || coHosts.includes(user.id)) {
+        setIsHost(true);
+      } else {
+        setIsHost(false);
+      }
+    };
+
+    const handleNewHost = ({ userId }: { userId: string }) => {
+      if (user.id === userId) {
+        setIsHost(true);
+      }
+    };
+
     socket.on("new_cohost", handleNewCohost);
+    socket.on("room_state", handleRoomState);
+    socket.on("new_host", handleNewHost);
     return () => {
       socket.off("new_cohost", handleNewCohost);
+      socket.off("room_state", handleRoomState);
+      socket.off("new_host", handleNewHost);
     };
   }, [socket, user]);
 
@@ -209,6 +227,7 @@ export default function Room() {
       clearMessages();
       disconnect();
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, user]);
 
   useVoiceActivityDetection(id, localStreamState);
@@ -339,7 +358,7 @@ export default function Room() {
 
           {/* Main Screen Renderer */}
           {mainScreenSource === 'url' ? (
-            id ? <VideoPlayer ref={videoPlayerRef} roomId={id} isFullscreen={isFullscreen} isHost={isHost} broadcastMediaStream={broadcastMediaStream} /> : null
+            id ? <VideoPlayer ref={videoPlayerRef} roomId={id} isFullscreen={isFullscreen} isHost={isHost} broadcastMediaStream={broadcastMediaStream} shareScreen={shareScreen} /> : null
           ) : (
             (() => {
               const streamToRender = [

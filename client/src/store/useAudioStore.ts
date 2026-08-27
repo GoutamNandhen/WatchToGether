@@ -40,7 +40,7 @@ const getSavedSettings = (): AudioSettings => {
   if (saved) {
     try {
       return { ...defaultSettings, ...JSON.parse(saved) };
-    } catch (e) {
+    } catch {
       return defaultSettings;
     }
   }

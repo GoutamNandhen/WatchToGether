@@ -88,11 +88,16 @@ interface VideoGridProps {
 export default function VideoGrid({ localStream, screenStream, peers, peerStatuses = {}, screenShares = {}, toggleAudio, toggleVideo, shareScreen, toggleFullscreen, isFullscreen = false, floating = false, isBottomHovered = false, onMouseLeaveBottom, isHost = false, roomId }: VideoGridProps) {
   const [audioEnabled, setAudioEnabled] = useState(true);
   const [videoEnabled, setVideoEnabled] = useState(true);
-  const [isCircle, setIsCircle] = useState(false);
-  const [viewMode, setViewMode] = useState<'list' | 'grid'>('grid');
+  const [isCircle, setIsCircle] = useState(() => localStorage.getItem("vg_isCircle") === "true");
+  const [viewMode, setViewMode] = useState<'list' | 'grid'>(() => (localStorage.getItem("vg_viewMode") as 'list' | 'grid') || 'grid');
   const [pinnedPeers, setPinnedPeers] = useState<string[]>([]);
-  const [maxCameras, setMaxCameras] = useState(2);
-  const [dataSaver, setDataSaver] = useState(false);
+  const [maxCameras, setMaxCameras] = useState(() => parseInt(localStorage.getItem("vg_maxCameras") || "2", 10));
+  const [dataSaver, setDataSaver] = useState(() => localStorage.getItem("vg_dataSaver") === "true");
+
+  useEffect(() => { localStorage.setItem("vg_isCircle", String(isCircle)); }, [isCircle]);
+  useEffect(() => { localStorage.setItem("vg_viewMode", viewMode); }, [viewMode]);
+  useEffect(() => { localStorage.setItem("vg_maxCameras", String(maxCameras)); }, [maxCameras]);
+  useEffect(() => { localStorage.setItem("vg_dataSaver", String(dataSaver)); }, [dataSaver]);
   
   const { activeSpeakers } = useAudioStore();
   const { socket } = useSocketStore();

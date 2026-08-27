@@ -22,23 +22,24 @@ export default function InviteModal({ isOpen, onClose, roomId }: InviteModalProp
   const [isCopied, setIsCopied] = useState(false);
   const [invitedMap, setInvitedMap] = useState<Record<string, boolean>>({});
 
-  useEffect(() => {
-    if (isOpen) {
-      fetchFriends();
-      setInvitedMap({});
-    }
-  }, [isOpen]);
-
   const fetchFriends = async () => {
     try {
       const res = await api.get("/friends");
       // Only show accepted friends
-      const accepted = res.data.friends.filter((f: any) => f.status === "ACCEPTED");
+      const accepted = res.data.friends.filter((f: { status: string }) => f.status === "ACCEPTED");
       setFriends(accepted);
     } catch (error) {
       console.error("Failed to fetch friends:", error);
     }
   };
+
+  useEffect(() => {
+    if (isOpen) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      fetchFriends();
+      setInvitedMap({});
+    }
+  }, [isOpen]);
 
   const handleCopyLink = () => {
     navigator.clipboard.writeText(window.location.href);

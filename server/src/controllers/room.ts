@@ -193,3 +193,55 @@ export const joinRoom = async (req: AuthRequest, res: Response): Promise<void> =
     res.status(500).json({ error: "Internal server error" });
   }
 };
+
+export const getRoomHistory = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const userId = req.userId;
+    if (!userId) {
+      res.status(401).json({ error: "Unauthorized" });
+      return;
+    }
+
+    const rooms = await prisma.room.findMany({
+      where: {
+        OR: [
+          { hostId: userId },
+          { participants: { some: { userId } } },
+          { coHosts: { some: { userId } } }
+        ]
+      },
+      include: { host: { select: { name: true } }, _count: { select: { participants: true } } },
+      orderBy: { createdAt: 'desc' }
+    });
+    res.status(200).json({ rooms });
+  } catch (error) {
+    console.error("Get Room History Error:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+};
+
+export const endRoom = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const id = req.params.id as string;
+    const userId = req.userId;
+
+    const room = await prisma.room.findUnique({ where: { id } });
+    if (!room) {
+      res.status(404).json({ error: "Room not found" });
+      return;
+    }
+    if (room.hostId !== userId) {
+      res.status(403).json({ error: "Forbidden: Only the host can end the room" });
+      return;
+    }
+
+    await prisma.room.update({
+      where: { id },
+      data: { isActive: false }
+    });
+    res.status(200).json({ message: "Room ended successfully" });
+  } catch (error) {
+    console.error("End Room Error:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+};

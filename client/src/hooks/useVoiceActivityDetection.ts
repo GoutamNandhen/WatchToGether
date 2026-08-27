@@ -14,6 +14,7 @@ export function useVoiceActivityDetection(roomId: string | undefined, localStrea
 
     let audioContext: AudioContext;
     try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
     } catch (e) {
       console.error("AudioContext not supported", e);

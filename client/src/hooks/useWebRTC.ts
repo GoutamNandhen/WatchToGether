@@ -19,14 +19,30 @@ export function useWebRTC(roomId: string) {
   const screenStreamRef = useRef<MediaStream | null>(null);
   const peerConnections = useRef<PeerConnection>({});
 
-  const getLocalStream = async (video = true, audio = true) => {
+  const getLocalStream = async () => {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video, audio });
+      const savedVideo = localStorage.getItem('wt_pref_camera') !== 'false';
+      const savedAudio = localStorage.getItem('wt_pref_mic') !== 'false';
+
+      let stream: MediaStream;
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({ video: savedVideo, audio: true });
+      } catch (err) {
+        console.warn("Failed with requested constraints, falling back to audio only", err);
+        stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        localStorage.setItem('wt_pref_camera', 'false');
+      }
+
+      const audioTrack = stream.getAudioTracks()[0];
+      if (audioTrack && !savedAudio) {
+        audioTrack.enabled = false;
+      }
+
       localStream.current = stream;
       setLocalStreamState(stream);
       return stream;
     } catch (err) {
-      console.error("Failed to get local stream", err);
+      console.error("Failed to get any local stream", err);
       return null;
     }
   };
@@ -152,6 +168,17 @@ export function useWebRTC(roomId: string) {
       });
     });
 
+    const handleSocketDisconnect = () => {
+      console.log("Socket disconnected, cleaning up WebRTC");
+      Object.values(peerConnections.current).forEach(pc => pc.close());
+      peerConnections.current = {};
+      setPeers([]);
+      setPeerStatuses({});
+      setScreenShares({});
+    };
+
+    socket.on("disconnect", handleSocketDisconnect);
+
     return () => {
       socket.off("user_joined");
       socket.off("webrtc_offer");
@@ -161,7 +188,9 @@ export function useWebRTC(roomId: string) {
       socket.off("participant_status");
       socket.off("screen_share_start");
       socket.off("screen_share_stop");
+      socket.off("disconnect", handleSocketDisconnect);
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [socket, user, roomId]);
 
   const toggleVideo = async () => {
@@ -174,6 +203,7 @@ export function useWebRTC(roomId: string) {
     if (videoTrack && videoTrack.readyState === 'live') {
       videoTrack.stop();
       localStream.current.removeTrack(videoTrack);
+      localStorage.setItem('wt_pref_camera', 'false');
       
       socket?.emit("participant_status", { roomId, cam: false, mic });
       // Force a state update with the new tracks
@@ -183,6 +213,7 @@ export function useWebRTC(roomId: string) {
       try {
         const newStream = await navigator.mediaDevices.getUserMedia({ video: true });
         const newVideoTrack = newStream.getVideoTracks()[0];
+        localStorage.setItem('wt_pref_camera', 'true');
         
         localStream.current.addTrack(newVideoTrack);
 
@@ -205,13 +236,36 @@ export function useWebRTC(roomId: string) {
     }
   };
 
-  const toggleAudio = () => {
-    if (localStream.current) {
-      const audioTrack = localStream.current.getAudioTracks()[0];
-      if (audioTrack) {
-        audioTrack.enabled = !audioTrack.enabled;
+  const toggleAudio = async () => {
+    if (!localStream.current) return;
+    
+    const audioTrack = localStream.current.getAudioTracks()[0];
+    if (audioTrack) {
+      audioTrack.enabled = !audioTrack.enabled;
+      localStorage.setItem('wt_pref_mic', String(audioTrack.enabled));
+      const cam = localStream.current.getVideoTracks()[0]?.enabled ?? false;
+      socket?.emit("participant_status", { roomId, cam, mic: audioTrack.enabled });
+    } else {
+      try {
+        const audioStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        const newAudioTrack = audioStream.getAudioTracks()[0];
+        localStream.current.addTrack(newAudioTrack);
+        localStorage.setItem('wt_pref_mic', 'true');
+        
+        Object.values(peerConnections.current).forEach((pc) => {
+          const sender = pc.getSenders().find((s) => s.track === null || (s.track && s.track.kind === 'audio'));
+          if (sender) {
+            sender.replaceTrack(newAudioTrack);
+          } else {
+            pc.addTrack(newAudioTrack, localStream.current!);
+          }
+        });
+        
         const cam = localStream.current.getVideoTracks()[0]?.enabled ?? false;
-        socket?.emit("participant_status", { roomId, cam, mic: audioTrack.enabled });
+        socket?.emit("participant_status", { roomId, cam, mic: true });
+        setLocalStreamState(new MediaStream(localStream.current.getTracks()));
+      } catch (e) {
+        console.error("Failed to add audio track", e);
       }
     }
   };

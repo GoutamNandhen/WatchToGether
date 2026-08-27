@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, forwardRef, useImperativeHandle } from "re
 import ReactPlayer from "react-player";
 import { useSocketStore } from "../store/useSocketStore";
 import { useAudioStore } from "../store/useAudioStore";
+import { MonitorPlay } from "lucide-react";
 
 export interface VideoPlayerRef {
   seekTo: (time: number) => void;
@@ -13,9 +14,10 @@ interface VideoPlayerProps {
   isFullscreen?: boolean;
   isHost: boolean;
   broadcastMediaStream?: (stream: MediaStream) => void;
+  shareScreen?: () => void;
 }
 
-const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(({ roomId, isFullscreen = false, isHost, broadcastMediaStream }, ref) => {
+const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(({ roomId, isFullscreen = false, isHost, broadcastMediaStream, shareScreen }, ref) => {
   const { socket } = useSocketStore();
   const [url, setUrl] = useState("https://www.youtube.com/watch?v=aqz-KE-bpKQ");
   const [inputUrl, setInputUrl] = useState("");
@@ -152,28 +154,30 @@ const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(({ roomId, isFu
       }
     });
 
-    socket.on("request_sync", ({ socketId }) => {
-      if (isHost && playerRef.current) {
-        const time = typeof playerRef.current.getCurrentTime === 'function' ? playerRef.current.getCurrentTime() : 0;
-        socket.emit("sync_response", { targetSocketId: socketId, time, playing: playing, url });
-      }
-    });
 
-    socket.on("sync_response", ({ time, playing: hostPlaying, url: hostUrl }) => {
+
+    socket.on("sync_response", (playbackState: { time: number, playing: boolean, url: string, lastUpdatedAt?: number } | null) => {
+      if (!playbackState) return;
+      const { time, playing: hostPlaying, url: hostUrl, lastUpdatedAt } = playbackState;
       isHandlingRemote.current = true;
-      if (hostUrl !== url) setUrl(hostUrl);
+      if (hostUrl && hostUrl !== url) setUrl(hostUrl);
       setPlaying(hostPlaying);
       if (playerRef.current) {
+        let expectedTime = time;
+        if (hostPlaying && lastUpdatedAt) {
+          expectedTime = time + (Date.now() - lastUpdatedAt) / 1000;
+        }
+
         const myTime = typeof playerRef.current.getCurrentTime === 'function' ? playerRef.current.getCurrentTime() : 0;
-        const drift = time - myTime;
+        const drift = expectedTime - myTime;
         
         if (Math.abs(drift) > 3) {
-          if (typeof playerRef.current.seekTo === 'function') playerRef.current.seekTo(time, "seconds");
+          if (typeof playerRef.current.seekTo === 'function') playerRef.current.seekTo(expectedTime, "seconds");
           setPlaybackRate(1.0);
         } else if (drift > 0.5) {
-          setPlaybackRate(1.05); // Host is ahead, speed up
+          setPlaybackRate(1.05); // Server is ahead, speed up
         } else if (drift < -0.5) {
-          setPlaybackRate(0.95); // Host is behind, slow down
+          setPlaybackRate(0.95); // Server is behind, slow down
         } else {
           setPlaybackRate(1.0); // Synced!
         }
@@ -245,7 +249,14 @@ const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(({ roomId, isFu
     }
   };
 
+  const handleStopMedia = () => {
+    setUrl("");
+    setPlaying(false);
+    socket?.emit("change_video", { roomId, url: "" });
+  };
+
   // Unwrap default export for Vite ESM compatibility with react-player v2
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const Player: any = (ReactPlayer as any).default || ReactPlayer;
 
   const handleLocalFile = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -265,11 +276,11 @@ const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(({ roomId, isFu
     setTimeout(() => {
       if (playerRef.current && broadcastMediaStream) {
         const videoEl = playerRef.current.getInternalPlayer() as HTMLVideoElement;
-        if (videoEl && typeof (videoEl as any).captureStream === 'function') {
-          const stream = (videoEl as any).captureStream();
+        if (videoEl && typeof (videoEl as HTMLVideoElement & { captureStream?: () => MediaStream }).captureStream === 'function') {
+          const stream = (videoEl as HTMLVideoElement & { captureStream: () => MediaStream }).captureStream();
           broadcastMediaStream(stream);
-        } else if (videoEl && typeof (videoEl as any).mozCaptureStream === 'function') {
-          const stream = (videoEl as any).mozCaptureStream();
+        } else if (videoEl && typeof (videoEl as HTMLVideoElement & { mozCaptureStream?: () => MediaStream }).mozCaptureStream === 'function') {
+          const stream = (videoEl as HTMLVideoElement & { mozCaptureStream: () => MediaStream }).mozCaptureStream();
           broadcastMediaStream(stream);
         }
       }
@@ -296,14 +307,32 @@ const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(({ roomId, isFu
                 Change
               </button>
             </div>
-            <div className="flex items-center gap-2">
-              <span className="text-xs text-slate-400 font-medium">OR PLAY LOCAL FILE:</span>
+            <div className="flex items-center gap-2 mt-1">
+              <span className="text-xs text-slate-400 font-medium whitespace-nowrap">LOCAL FILE:</span>
               <input 
                 type="file" 
                 accept="video/*" 
                 onChange={handleLocalFile}
                 className="text-xs text-slate-300 file:mr-2 file:py-1 file:px-2 file:rounded file:border-0 file:text-xs file:bg-indigo-600 file:text-white hover:file:bg-indigo-500 transition-colors w-full cursor-pointer"
               />
+            </div>
+            <div className="flex items-center gap-2 mt-2 pt-2 border-t border-slate-700/50">
+              {shareScreen && (
+                <button
+                  onClick={shareScreen}
+                  className="flex-1 bg-slate-700 hover:bg-slate-600 text-white px-3 py-1.5 rounded text-sm transition-colors flex items-center justify-center gap-2"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect width="20" height="14" x="2" y="3" rx="2"/><line x1="8" x2="16" y1="21" y2="21"/><line x1="12" x2="12" y1="17" y2="21"/></svg>
+                  Share Screen
+                </button>
+              )}
+              <button
+                onClick={handleStopMedia}
+                className="flex-1 bg-red-600/80 hover:bg-red-500 text-white px-3 py-1.5 rounded text-sm transition-colors flex items-center justify-center gap-2"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M9 9h6v6H9z"/></svg>
+                Stop Media
+              </button>
             </div>
           </div>
         ) : (
@@ -325,23 +354,30 @@ const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(({ roomId, isFu
       </div>
 
       <div className={`flex-1 overflow-hidden relative bg-black flex items-center justify-center transition-all duration-300 ${isFullscreen ? '' : 'rounded-2xl shadow-2xl border border-slate-800'}`}>
-        <Player
-          key={url}
-          ref={playerRef}
-          url={url}
-          width="100%"
-          height="100%"
-          playing={playing}
-          volume={volume}
-          playbackRate={playbackRate}
-          onPlay={handlePlay}
-          onPause={handlePause}
-          onProgress={handleProgress}
-          onError={() => setVideoError(true)}
-          controls={true}
-          config={{ youtube: { playerVars: { fs: 0 } } }}
-          style={{ position: "absolute", top: 0, left: 0 }}
-        />
+        {url ? (
+          <Player
+            key={url}
+            ref={playerRef}
+            url={url}
+            width="100%"
+            height="100%"
+            playing={playing}
+            volume={volume}
+            playbackRate={playbackRate}
+            onPlay={handlePlay}
+            onPause={handlePause}
+            onProgress={handleProgress}
+            onError={() => setVideoError(true)}
+            controls={true}
+            config={{ youtube: { playerVars: { fs: 0 } } }}
+            style={{ position: "absolute", top: 0, left: 0 }}
+          />
+        ) : (
+          <div className="text-slate-500 flex flex-col items-center justify-center h-full">
+            <MonitorPlay size={48} className="mb-4 opacity-20" />
+            <p>Waiting for host to play media...</p>
+          </div>
+        )}
       </div>
     </div>
   );

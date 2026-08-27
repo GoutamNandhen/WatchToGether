@@ -1,160 +1,241 @@
 import { Server, Socket } from "socket.io";
 import { PrismaClient } from "@prisma/client";
+import jwt from "jsonwebtoken";
+import { RoomManager } from "./managers/RoomManager";
+import * as schemas from "./schemas/socketSchemas";
 
 const prisma = new PrismaClient();
 
 export const setupSocketHandlers = (io: Server) => {
-  io.on("connection", (socket: Socket) => {
-    console.log("A user connected:", socket.id);
+  const roomManager = new RoomManager(io);
 
-    // Join Global Room for Notifications
-    socket.on("join_global_room", ({ userId }) => {
-      socket.join(`user_${userId}`);
+  // Authentication Middleware
+  io.use((socket, next) => {
+    const token = socket.handshake.auth?.token;
+    if (!token) {
+      return next(new Error("Authentication error: No token provided"));
+    }
+    try {
+      const decoded = jwt.verify(token, process.env.JWT_SECRET as string) as { userId: string };
+      socket.data.userId = decoded.userId;
+      next();
+    } catch (err) {
+      next(new Error("Authentication error: Invalid token"));
+    }
+  });
+
+  io.on("connection", (socket: Socket) => {
+    const userId = socket.data.userId;
+    console.log(`User connected: ${userId} (Socket: ${socket.id})`);
+
+    socket.on("join_global_room", (data) => {
+      const payload = schemas.validateSocketPayload(schemas.joinGlobalRoomSchema, data, socket);
+      if (!payload) return;
+      socket.join(`user_${payload.userId}`);
     });
 
-    // Join Room
-    socket.on("join_room", async ({ roomId, userId, userName }) => {
+    socket.on("join_room", async (data) => {
+      const payload = schemas.validateSocketPayload(schemas.joinRoomSchema, data, socket);
+      if (!payload) return;
+      
+      const { roomId, userName } = payload;
+      
+      // Ensure the user joins the room with their authenticated userId, not whatever they pass
+      if (payload.userId !== userId) {
+        socket.emit("error", { message: "Unauthorized userId mismatch" });
+        return;
+      }
+
+      const success = await roomManager.handleJoin(roomId, socket.id, userId, userName);
+      if (!success) {
+        socket.emit("error", { message: "Room not found" });
+        return;
+      }
+
       socket.join(roomId);
-      socket.data.userId = userId;
       console.log(`User ${userName} (${userId}) joined room ${roomId}`);
+
+      const room = roomManager.getRoom(roomId);
+      
+      // Send the current authoritative state to the joining user
+      if (room) {
+        socket.emit("sync_response", room.playback);
+        socket.emit("room_state", { hostId: room.hostId, coHosts: Array.from(room.coHosts) });
+      }
 
       // Broadcast to room that a user joined
       socket.to(roomId).emit("user_joined", { userId, userName, socketId: socket.id });
-
-      // Save participant to DB asynchronously
-      try {
-        await prisma.participant.upsert({
-          where: { userId_roomId: { userId, roomId } },
-          update: { joinedAt: new Date() },
-          create: { userId, roomId },
-        });
-      } catch (err) {
-        console.error("Error saving participant:", err);
-      }
     });
 
-    // Chat Message
-    socket.on("send_message", async ({ roomId, userId, userName, content }) => {
+    socket.on("send_message", async (data) => {
+      const payload = schemas.validateSocketPayload(schemas.sendMessageSchema, data, socket);
+      if (!payload) return;
+      
+      const { roomId, userName, content } = payload;
+      
+      if (payload.userId !== userId) return; // Ignore spoofed
+
       const messageData = {
-        id: Date.now().toString(), // temporary ID
+        id: Date.now().toString(),
         roomId,
         userId,
         userName,
-        content,
+        content, // Length validation done by zod (max 1000). React safely renders text.
         createdAt: new Date().toISOString()
       };
       
       io.to(roomId).emit("receive_message", messageData);
 
-      // Save to DB asynchronously
       try {
         await prisma.message.create({
-          data: {
-            content,
-            userId,
-            roomId,
-          }
+          data: { content, userId, roomId }
         });
       } catch (err) {
         console.error("Error saving message:", err);
       }
     });
 
-    // Leave Room
-    socket.on("leave_room", ({ roomId, userId, userName }) => {
-      socket.leave(roomId);
-      socket.to(roomId).emit("user_left", { userId, userName, socketId: socket.id });
+    socket.on("leave_room", (data) => {
+      const payload = schemas.validateSocketPayload(schemas.joinRoomSchema, data, socket);
+      if (!payload) return;
+      if (payload.userId !== userId) return;
+
+      socket.leave(payload.roomId);
+      roomManager.handleDisconnect(socket.id); // This will handle the delay and DB removal
     });
 
-    // Video Sync Events
-    socket.on("play_video", ({ roomId, time }) => {
-      socket.to(roomId).emit("play_video", { time });
+    // --- HOST/CO-HOST PRIVILEGED EVENTS ---
+
+    socket.on("play_video", (data) => {
+      const payload = schemas.validateSocketPayload(schemas.roomTimeSchema, data, socket);
+      if (!payload) return;
+      if (!roomManager.isAuthorized(payload.roomId, userId)) return;
+
+      roomManager.updatePlayback(payload.roomId, { playing: true, time: payload.time });
+      socket.to(payload.roomId).emit("play_video", { time: payload.time });
     });
 
-    socket.on("pause_video", ({ roomId, time }) => {
-      socket.to(roomId).emit("pause_video", { time });
+    socket.on("pause_video", (data) => {
+      const payload = schemas.validateSocketPayload(schemas.roomTimeSchema, data, socket);
+      if (!payload) return;
+      if (!roomManager.isAuthorized(payload.roomId, userId)) return;
+
+      roomManager.updatePlayback(payload.roomId, { playing: false, time: payload.time });
+      socket.to(payload.roomId).emit("pause_video", { time: payload.time });
     });
 
-    socket.on("seek_video", ({ roomId, time }) => {
-      socket.to(roomId).emit("seek_video", { time });
+    socket.on("seek_video", (data) => {
+      const payload = schemas.validateSocketPayload(schemas.roomTimeSchema, data, socket);
+      if (!payload) return;
+      if (!roomManager.isAuthorized(payload.roomId, userId)) return;
+
+      roomManager.updatePlayback(payload.roomId, { time: payload.time });
+      socket.to(payload.roomId).emit("seek_video", { time: payload.time });
     });
 
-    socket.on("change_video", ({ roomId, url }) => {
-      socket.to(roomId).emit("change_video", { url });
+    socket.on("change_video", (data) => {
+      const payload = schemas.validateSocketPayload(schemas.changeVideoSchema, data, socket);
+      if (!payload) return;
+      if (!roomManager.isAuthorized(payload.roomId, userId)) return;
+
+      roomManager.updatePlayback(payload.roomId, { url: payload.url, time: 0 });
+      socket.to(payload.roomId).emit("change_video", { url: payload.url });
     });
 
-    socket.on("request_sync", ({ roomId }) => {
-      socket.to(roomId).emit("request_sync", { socketId: socket.id });
-    });
-
-    socket.on("sync_response", ({ targetSocketId, time, playing, url }) => {
-      io.to(targetSocketId).emit("sync_response", { time, playing, url });
-    });
-
-    // WebRTC Signaling
-    socket.on("webrtc_offer", ({ offer, to, from }) => {
-      socket.to(to).emit("webrtc_offer", { offer, from });
-    });
-
-    socket.on("webrtc_answer", ({ answer, to, from }) => {
-      socket.to(to).emit("webrtc_answer", { answer, from });
-    });
-
-    socket.on("webrtc_ice_candidate", ({ candidate, to, from }) => {
-      socket.to(to).emit("webrtc_ice_candidate", { candidate, from });
-    });
-
-    // Audio Prioritization Events
-    socket.on("started_speaking", ({ roomId }) => {
-      socket.to(roomId).emit("user_speaking", { socketId: socket.id });
-    });
-
-    socket.on("stopped_speaking", ({ roomId }) => {
-      socket.to(roomId).emit("user_stopped_speaking", { socketId: socket.id });
-    });
-
-    socket.on("host_announcement_start", ({ roomId }) => {
-      socket.to(roomId).emit("host_announcement_start", { socketId: socket.id });
-    });
-
-    socket.on("host_announcement_stop", ({ roomId }) => {
-      socket.to(roomId).emit("host_announcement_stop", { socketId: socket.id });
-    });
-
-    socket.on("participant_status", ({ roomId, cam, mic }) => {
-      socket.to(roomId).emit("participant_status", { socketId: socket.id, cam, mic });
-    });
-
-    socket.on("make_cohost", async ({ roomId, targetSocketId }) => {
-      try {
-        const targetSocket = io.sockets.sockets.get(targetSocketId);
-        const targetUserId = targetSocket?.data?.userId;
-        if (!targetUserId) {
-          console.error("Target user ID not found for socket", targetSocketId);
-          return;
-        }
-
-        await prisma.roomCoHost.upsert({
-          where: { roomId_userId: { roomId, userId: targetUserId } },
-          update: {},
-          create: { roomId, userId: targetUserId }
-        });
-        io.to(roomId).emit("new_cohost", { userId: targetUserId });
-      } catch (err) {
-        console.error("Failed to make co-host", err);
+    socket.on("request_sync", (data) => {
+      const payload = schemas.validateSocketPayload(schemas.roomOnlySchema, data, socket);
+      if (!payload) return;
+      
+      const room = roomManager.getRoom(payload.roomId);
+      if (room) {
+        socket.emit("sync_response", room.playback);
       }
     });
 
-    socket.on("screen_share_start", ({ roomId, streamId }) => {
-      socket.to(roomId).emit("screen_share_start", { socketId: socket.id, streamId });
+    socket.on("make_cohost", async (data) => {
+      const payload = schemas.validateSocketPayload(schemas.makeCohostSchema, data, socket);
+      if (!payload) return;
+      
+      const room = roomManager.getRoom(payload.roomId);
+      if (!room) return;
+      
+      // ONLY the HOST can make someone a co-host
+      if (room.hostId !== userId) {
+        socket.emit("error", { message: "Only the host can assign co-hosts" });
+        return;
+      }
+      
+      const targetSocket = io.sockets.sockets.get(payload.targetSocketId);
+      const targetUserId = targetSocket?.data?.userId;
+      if (!targetUserId) return;
+
+      const success = await roomManager.makeCoHost(payload.roomId, targetUserId);
+      if (success) {
+        io.to(payload.roomId).emit("new_cohost", { userId: targetUserId });
+      }
     });
 
-    socket.on("screen_share_stop", ({ roomId }) => {
-      socket.to(roomId).emit("screen_share_stop", { socketId: socket.id });
+    // --- WEBRTC SIGNALING ---
+    
+    socket.on("webrtc_offer", (data) => {
+      const p = schemas.validateSocketPayload(schemas.webrtcOfferAnswerSchema, data, socket);
+      if (p) socket.to(p.to).emit("webrtc_offer", { offer: p.offer, from: socket.id });
+    });
+
+    socket.on("webrtc_answer", (data) => {
+      const p = schemas.validateSocketPayload(schemas.webrtcOfferAnswerSchema, data, socket);
+      if (p) socket.to(p.to).emit("webrtc_answer", { answer: p.answer, from: socket.id });
+    });
+
+    socket.on("webrtc_ice_candidate", (data) => {
+      const p = schemas.validateSocketPayload(schemas.webrtcCandidateSchema, data, socket);
+      if (p) socket.to(p.to).emit("webrtc_ice_candidate", { candidate: p.candidate, from: socket.id });
+    });
+
+    // --- AUDIO PRIORITIZATION & SCREEN SHARE ---
+
+    socket.on("started_speaking", (data) => {
+      const p = schemas.validateSocketPayload(schemas.roomOnlySchema, data, socket);
+      if (p) socket.to(p.roomId).emit("user_speaking", { socketId: socket.id });
+    });
+
+    socket.on("stopped_speaking", (data) => {
+      const p = schemas.validateSocketPayload(schemas.roomOnlySchema, data, socket);
+      if (p) socket.to(p.roomId).emit("user_stopped_speaking", { socketId: socket.id });
+    });
+
+    socket.on("host_announcement_start", (data) => {
+      const p = schemas.validateSocketPayload(schemas.roomOnlySchema, data, socket);
+      if (p && roomManager.isAuthorized(p.roomId, userId)) {
+        socket.to(p.roomId).emit("host_announcement_start", { socketId: socket.id });
+      }
+    });
+
+    socket.on("host_announcement_stop", (data) => {
+      const p = schemas.validateSocketPayload(schemas.roomOnlySchema, data, socket);
+      if (p && roomManager.isAuthorized(p.roomId, userId)) {
+        socket.to(p.roomId).emit("host_announcement_stop", { socketId: socket.id });
+      }
+    });
+
+    socket.on("participant_status", (data) => {
+      const p = schemas.validateSocketPayload(schemas.participantStatusSchema, data, socket);
+      if (p) socket.to(p.roomId).emit("participant_status", { socketId: socket.id, cam: p.cam, mic: p.mic });
+    });
+
+    socket.on("screen_share_start", (data) => {
+      const p = schemas.validateSocketPayload(schemas.screenShareStartSchema, data, socket);
+      if (p) socket.to(p.roomId).emit("screen_share_start", { socketId: socket.id, streamId: p.streamId });
+    });
+
+    socket.on("screen_share_stop", (data) => {
+      const p = schemas.validateSocketPayload(schemas.roomOnlySchema, data, socket);
+      if (p) socket.to(p.roomId).emit("screen_share_stop", { socketId: socket.id });
     });
 
     socket.on("disconnect", () => {
       console.log("User disconnected:", socket.id);
+      roomManager.handleDisconnect(socket.id);
     });
   });
 };

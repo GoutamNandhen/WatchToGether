@@ -1,7 +1,8 @@
 import { create } from 'zustand';
 import { io, Socket } from 'socket.io-client';
+import { useAuthStore } from './useAuthStore';
 
-interface Message {
+export interface Message {
   id: string;
   userId: string;
   userName: string;
@@ -12,7 +13,7 @@ interface Message {
 interface SocketState {
   socket: Socket | null;
   messages: Message[];
-  participants: any[];
+  participants: { userId: string; userName: string }[];
   connect: () => void;
   disconnect: () => void;
   joinRoom: (roomId: string, userId: string, userName: string) => void;
@@ -30,10 +31,27 @@ export const useSocketStore = create<SocketState>((set, get) => ({
   connect: () => {
     if (!get().socket) {
       const url = import.meta.env.VITE_API_URL || 'http://localhost:5000';
-      const socket = io(url);
+      const token = useAuthStore.getState().token;
+      
+      const socket = io(url, {
+        auth: { token },
+        reconnection: true,
+        reconnectionAttempts: Infinity,
+        reconnectionDelay: 1000,
+        reconnectionDelayMax: 5000,
+        timeout: 20000,
+      });
       
       socket.on('receive_message', (message: Message) => {
         set((state) => ({ messages: [...state.messages, message] }));
+      });
+      
+      socket.on('error', (err: unknown) => {
+        console.error("Socket Error:", err);
+      });
+
+      socket.on('connect_error', (err: unknown) => {
+        console.error("Socket Connect Error:", err);
       });
 
       set({ socket });

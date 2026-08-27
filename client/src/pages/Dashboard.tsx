@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import api from "../lib/api";
 import { useAuthStore } from "../store/useAuthStore";
 import { useSocketStore } from "../store/useSocketStore";
-import { LogOut, Users, MonitorPlay, UserPlus, Check } from "lucide-react";
+import { LogOut, Users, MonitorPlay, UserPlus, Check, History } from "lucide-react";
 interface Friend {
   id: string;
   status: 'PENDING' | 'ACCEPTED';
@@ -22,7 +22,8 @@ export default function Dashboard() {
   const [joinRoomId, setJoinRoomId] = useState("");
   const [joinPassword, setJoinPassword] = useState("");
   const [friendEmail, setFriendEmail] = useState("");
-  const [activeTab, setActiveTab] = useState<'rooms' | 'friends'>('rooms');
+  const [activeTab, setActiveTab] = useState<'rooms' | 'friends' | 'history'>('rooms');
+  const [roomHistory, setRoomHistory] = useState<{id: string, name: string, isActive: boolean, hostId: string, host: {name: string}, createdAt: string}[]>([]);
   const { user, logout } = useAuthStore();
   const { socket, connect } = useSocketStore();
   const navigate = useNavigate();
@@ -33,12 +34,32 @@ export default function Dashboard() {
     }
   }, []);
 
+  const fetchFriends = async () => {
+    try {
+      const res = await api.get("/friends");
+      setFriends(res.data.friends);
+    } catch (error) {
+      console.error("Failed to fetch friends:", error);
+    }
+  };
+
+  const fetchHistory = async () => {
+    try {
+      const res = await api.get("/rooms/history");
+      setRoomHistory(res.data.rooms);
+    } catch (error) {
+      console.error("Failed to fetch history:", error);
+    }
+  };
+
   useEffect(() => {
     if (!user) {
       navigate("/login");
       return;
     }
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     fetchFriends();
+    fetchHistory();
     connect();
   }, [user]);
 
@@ -60,12 +81,15 @@ export default function Dashboard() {
     };
   }, [socket, user]);
 
-  const fetchFriends = async () => {
+
+
+  const handleEndRoom = async (roomId: string) => {
+    if (!confirm("Are you sure you want to end this room? It will become inactive for all participants.")) return;
     try {
-      const res = await api.get("/friends");
-      setFriends(res.data.friends);
+      await api.post(`/rooms/${roomId}/end`);
+      fetchHistory(); // Refresh
     } catch (error) {
-      console.error("Failed to fetch friends:", error);
+      console.error("Failed to end room:", error);
     }
   };
 
@@ -87,9 +111,10 @@ export default function Dashboard() {
     try {
       const res = await api.post("/rooms/join", { roomId: joinRoomId, password: joinPassword });
       navigate(`/room/${res.data.room.id}`);
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error("Failed to join room:", error);
-      alert(error.response?.data?.error || "Failed to join room. Check ID and password.");
+      const err = error as { response?: { data?: { error?: string } } };
+      alert(err.response?.data?.error || "Failed to join room. Check ID and password.");
     }
   };
 
@@ -106,8 +131,9 @@ export default function Dashboard() {
       setFriendEmail("");
       fetchFriends();
       alert("Friend request sent!");
-    } catch (error: any) {
-      alert(error.response?.data?.error || "Failed to send request");
+    } catch (error: unknown) {
+      const err = error as { response?: { data?: { error?: string } } };
+      alert(err.response?.data?.error || "Failed to send request");
     }
   };
 
@@ -146,6 +172,12 @@ export default function Dashboard() {
           className={`flex items-center gap-2 px-4 py-3 font-medium transition-all ${activeTab === 'friends' ? 'text-indigo-400 border-b-2 border-indigo-400' : 'text-slate-400 hover:text-slate-200'}`}
         >
           <Users size={18} /> Friends
+        </button>
+        <button 
+          onClick={() => { setActiveTab('history'); fetchHistory(); }}
+          className={`flex items-center gap-2 px-4 py-3 font-medium transition-all ${activeTab === 'history' ? 'text-indigo-400 border-b-2 border-indigo-400' : 'text-slate-400 hover:text-slate-200'}`}
+        >
+          <History size={18} /> History
         </button>
       </div>
 
@@ -200,7 +232,7 @@ export default function Dashboard() {
         
         {/* Main Content Area */}
         <div className="md:col-span-2 bg-slate-900 border border-slate-800 p-6 rounded-2xl">
-          {activeTab === 'rooms' ? (
+          {activeTab === 'rooms' && (
             <>
               <h2 className="text-xl font-semibold mb-4">Join Room</h2>
               <div className="bg-slate-950 border border-slate-800 p-6 rounded-xl max-w-md mx-auto mt-8">
@@ -234,7 +266,8 @@ export default function Dashboard() {
                 </form>
               </div>
             </>
-          ) : (
+          )}
+          {activeTab === 'friends' && (
             <>
               <h2 className="text-xl font-semibold mb-4">Your Friends</h2>
               {friends.length === 0 ? (
@@ -269,6 +302,55 @@ export default function Dashboard() {
                       </div>
                     </div>
                   ))}
+                </div>
+              )}
+            </>
+          )}
+          {activeTab === 'history' && (
+            <>
+              <h2 className="text-xl font-semibold mb-4">Room History</h2>
+              {roomHistory.length === 0 ? (
+                <div className="text-slate-400 text-sm flex items-center justify-center h-32 border border-dashed border-slate-800 rounded-lg">
+                  No rooms found. Create or join a room to see it here.
+                </div>
+              ) : (
+                <div className="space-y-4 max-h-[60vh] overflow-y-auto pr-2">
+                  {roomHistory.map((room) => {
+                    const isHost = room.hostId === user.id;
+                    return (
+                      <div key={room.id} className="flex flex-col sm:flex-row items-start sm:items-center justify-between bg-slate-950 p-4 rounded-xl border border-slate-800 gap-4">
+                        <div>
+                          <div className="flex items-center gap-2 mb-1">
+                            <h3 className="font-semibold text-lg">{room.name}</h3>
+                            <span className={`text-xs px-2 py-0.5 rounded-full border ${room.isActive ? 'bg-green-500/10 text-green-400 border-green-500/20' : 'bg-slate-800 text-slate-400 border-slate-700'}`}>
+                              {room.isActive ? 'Active' : 'Ended'}
+                            </span>
+                          </div>
+                          <p className="text-sm text-slate-400">
+                            Host: {isHost ? 'You' : room.host.name} • {new Date(room.createdAt).toLocaleDateString()}
+                          </p>
+                        </div>
+                        <div className="flex items-center gap-2 w-full sm:w-auto">
+                          {room.isActive && (
+                            <button 
+                              onClick={() => navigate(`/room/${room.id}`)}
+                              className="flex-1 sm:flex-none text-sm bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-2 rounded-lg font-medium transition-colors"
+                            >
+                              Join
+                            </button>
+                          )}
+                          {isHost && room.isActive && (
+                            <button 
+                              onClick={() => handleEndRoom(room.id)}
+                              className="flex-1 sm:flex-none text-sm bg-red-600/20 hover:bg-red-600/40 text-red-400 px-4 py-2 rounded-lg font-medium border border-red-900/50 transition-colors"
+                            >
+                              End
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
               )}
             </>

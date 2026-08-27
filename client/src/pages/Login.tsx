@@ -18,8 +18,9 @@ export default function Login() {
       setAuth(res.data.user, res.data.token);
       const from = location.state?.from || "/dashboard";
       navigate(from);
-    } catch (err: any) {
-      setError(err.response?.data?.error || "Login failed");
+    } catch (err: unknown) {
+      const errorResponse = err as { response?: { data?: { error?: string } } };
+      setError(errorResponse.response?.data?.error || "Login failed");
     }
   };
 
