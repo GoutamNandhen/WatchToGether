@@ -48,8 +48,8 @@ export class RoomManager {
         disconnectedParticipants: new Map(),
         playback: {
           playing: false,
-          time: 0,
-          url: "https://www.youtube.com/watch?v=aqz-KE-bpKQ", // default or load from DB if existed
+          time: dbRoom.playbackTime ?? 0,
+          url: dbRoom.playbackUrl ?? "https://www.youtube.com/watch?v=aqz-KE-bpKQ",
           lastUpdatedAt: Date.now(),
         },
       };
@@ -94,8 +94,15 @@ export class RoomManager {
         update: { joinedAt: new Date() },
         create: { userId, roomId },
       });
+
+      // Track historical visit
+      await prisma.roomHistoryEntry.upsert({
+        where: { userId_roomId: { userId, roomId } },
+        update: { visitedAt: new Date() },
+        create: { userId, roomId },
+      });
     } catch (err) {
-      console.error("Error saving participant:", err);
+      console.error("Error saving participant or history entry:", err);
     }
 
     return true;
@@ -198,7 +205,18 @@ export class RoomManager {
 
       this.io.to(roomId).emit("new_host", { userId: newHostId });
     } else {
-      // Room empty, could clean up in-memory state
+      // Room empty, clean up in-memory state and save playback state
+      try {
+        await prisma.room.update({
+          where: { id: roomId },
+          data: {
+            playbackUrl: room.playback.url,
+            playbackTime: room.playback.time,
+          },
+        });
+      } catch (err) {
+        console.error("Failed to save playback state", err);
+      }
       this.rooms.delete(roomId);
     }
   }

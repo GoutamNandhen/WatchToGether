@@ -23,7 +23,7 @@ export default function Dashboard() {
   const [joinPassword, setJoinPassword] = useState("");
   const [friendEmail, setFriendEmail] = useState("");
   const [activeTab, setActiveTab] = useState<'rooms' | 'friends' | 'history'>('rooms');
-  const [roomHistory, setRoomHistory] = useState<{id: string, name: string, isActive: boolean, hostId: string, host: {name: string}, createdAt: string}[]>([]);
+  const [roomHistory, setRoomHistory] = useState<{id: string, displayId: string, name: string, isActive: boolean, hostId: string, host: {name: string}, createdAt: string}[]>([]);
   const { user, logout } = useAuthStore();
   const { socket, connect } = useSocketStore();
   const navigate = useNavigate();
@@ -61,7 +61,7 @@ export default function Dashboard() {
     fetchFriends();
     fetchHistory();
     connect();
-  }, [user]);
+  }, [user, navigate, connect]);
 
   useEffect(() => {
     if (!socket || !user) return;
@@ -321,7 +321,7 @@ export default function Dashboard() {
                       <div key={room.id} className="flex flex-col sm:flex-row items-start sm:items-center justify-between bg-slate-950 p-4 rounded-xl border border-slate-800 gap-4">
                         <div>
                           <div className="flex items-center gap-2 mb-1">
-                            <h3 className="font-semibold text-lg">{room.name}</h3>
+                            <h3 className="font-semibold text-lg">{room.displayId ? `Room ID: ${room.displayId} — ` : ''}{room.name}</h3>
                             <span className={`text-xs px-2 py-0.5 rounded-full border ${room.isActive ? 'bg-green-500/10 text-green-400 border-green-500/20' : 'bg-slate-800 text-slate-400 border-slate-700'}`}>
                               {room.isActive ? 'Active' : 'Ended'}
                             </span>

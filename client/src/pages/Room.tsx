@@ -25,6 +25,8 @@ export default function Room() {
   const [isInviteModalOpen, setIsInviteModalOpen] = useState(false);
   const [mainScreenSource, setMainScreenSource] = useState<'url' | string>('url');
   const [roomCreatedAt, setRoomCreatedAt] = useState<string | null>(null);
+  const [roomDisplayId, setRoomDisplayId] = useState<string | null>(null);
+  const [roomName, setRoomName] = useState<string | null>(null);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isHost, setIsHost] = useState(false);
   const [isChatOpen, setIsChatOpen] = useState(false);
@@ -150,6 +152,8 @@ export default function Room() {
       api.get(`/rooms/${id}`).then((res) => {
         if (res.data.room) {
           setRoomCreatedAt(res.data.room.createdAt);
+          setRoomDisplayId(res.data.room.displayId);
+          setRoomName(res.data.room.name);
           if (user) {
             if (res.data.room.hostId === user.id) {
               setIsHost(true);
@@ -216,8 +220,9 @@ export default function Room() {
 
     if (id) {
       connect();
-      joinRoom(id, user.id, user.name);
-      getLocalStream();
+      getLocalStream().then(() => {
+        joinRoom(id, user.id, user.name);
+      });
     }
 
     return () => {
@@ -348,8 +353,11 @@ export default function Room() {
               </select>
             </div>
 
-            {/* Room Duration */}
-            <div className="absolute top-4 right-4 z-50">
+            {/* Room Info & Duration */}
+            <div className="absolute top-4 right-4 z-50 flex items-center gap-2">
+              <div className="bg-slate-900/80 text-white text-sm backdrop-blur-md px-3 py-1.5 rounded-lg border border-slate-700 shadow-lg font-medium hidden sm:block">
+                {roomDisplayId ? `Room ID: ${roomDisplayId} — ` : ''}{roomName || 'Room'}
+              </div>
               <div className="bg-slate-900/80 text-white text-sm backdrop-blur-md px-3 py-1.5 rounded-lg border border-slate-700 shadow-lg font-mono">
                 {duration}
               </div>

@@ -15,8 +15,22 @@ export const createRoom = async (req: AuthRequest, res: Response): Promise<void>
       return;
     }
 
+    const generateDisplayId = async () => {
+      let unique = false;
+      let newId = "";
+      while (!unique) {
+        newId = `WT-${Math.floor(1000 + Math.random() * 9000)}`;
+        const existing = await prisma.room.findUnique({ where: { displayId: newId } });
+        if (!existing) unique = true;
+      }
+      return newId;
+    };
+
+    const displayId = await generateDisplayId();
+
     const room = await prisma.room.create({
       data: {
+        displayId,
         name,
         description,
         isPrivate: isPrivate || false,
@@ -53,6 +67,7 @@ export const getRoomById = async (req: AuthRequest, res: Response): Promise<void
       where: { id },
       select: {
         id: true,
+        displayId: true,
         name: true,
         description: true,
         isPrivate: true,
@@ -187,7 +202,7 @@ export const joinRoom = async (req: AuthRequest, res: Response): Promise<void> =
       return;
     }
 
-    res.status(200).json({ message: "Joined successfully", room: { id: room.id, name: room.name } });
+    res.status(200).json({ message: "Joined successfully", room: { id: room.id, displayId: room.displayId, name: room.name } });
   } catch (error) {
     console.error("Join Room Error:", error);
     res.status(500).json({ error: "Internal server error" });
@@ -202,17 +217,20 @@ export const getRoomHistory = async (req: AuthRequest, res: Response): Promise<v
       return;
     }
 
-    const rooms = await prisma.room.findMany({
-      where: {
-        OR: [
-          { hostId: userId },
-          { participants: { some: { userId } } },
-          { coHosts: { some: { userId } } }
-        ]
+    const historyEntries = await prisma.roomHistoryEntry.findMany({
+      where: { userId },
+      include: {
+        room: {
+          include: { 
+            host: { select: { name: true } }, 
+            _count: { select: { participants: true } } 
+          }
+        }
       },
-      include: { host: { select: { name: true } }, _count: { select: { participants: true } } },
-      orderBy: { createdAt: 'desc' }
+      orderBy: { visitedAt: 'desc' }
     });
+    
+    const rooms = historyEntries.map(entry => entry.room);
     res.status(200).json({ rooms });
   } catch (error) {
     console.error("Get Room History Error:", error);
