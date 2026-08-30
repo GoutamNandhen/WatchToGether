@@ -35,11 +35,12 @@ export default function Signup() {
         const from = location.state?.from || "/dashboard";
         navigate(from);
       }, 500);
-    } catch (err: any) {
-      if (!err.response) {
+    } catch (err: unknown) {
+      const axiosErr = err as import('axios').AxiosError<{ error?: string }>;
+      if (!axiosErr.response) {
         setError("Unable to connect to the server. Please check your connection and try again.");
       } else {
-        setError(err.response?.data?.error || "Unable to create account. Please try again.");
+        setError(axiosErr.response?.data?.error || "Unable to create account. Please try again.");
       }
     } finally {
       setIsLoading(false);
