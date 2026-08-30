@@ -66,6 +66,15 @@ export class RoomManager {
     return this.rooms.get(roomId);
   }
 
+  public getSocketRoomId(socketId: string): string | undefined {
+    for (const [roomId, room] of this.rooms.entries()) {
+      if (room.participants.has(socketId)) {
+        return roomId;
+      }
+    }
+    return undefined;
+  }
+
   public isAuthorized(roomId: string, userId: string): boolean {
     const room = this.rooms.get(roomId);
     if (!room) return false;

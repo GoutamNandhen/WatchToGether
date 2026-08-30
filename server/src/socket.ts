@@ -109,44 +109,54 @@ export const setupSocketHandlers = (io: Server) => {
     socket.on("play_video", (data) => {
       const payload = schemas.validateSocketPayload(schemas.roomTimeSchema, data, socket);
       if (!payload) return;
-      if (!roomManager.isAuthorized(payload.roomId, userId)) return;
+      const senderRoomId = roomManager.getSocketRoomId(socket.id);
+      if (senderRoomId !== payload.roomId) return;
+      if (!roomManager.isAuthorized(senderRoomId, userId)) return;
 
-      roomManager.updatePlayback(payload.roomId, { playing: true, time: payload.time });
-      socket.to(payload.roomId).emit("play_video", { time: payload.time });
+      roomManager.updatePlayback(senderRoomId, { playing: true, time: payload.time });
+      socket.to(senderRoomId).emit("play_video", { time: payload.time });
     });
 
     socket.on("pause_video", (data) => {
       const payload = schemas.validateSocketPayload(schemas.roomTimeSchema, data, socket);
       if (!payload) return;
-      if (!roomManager.isAuthorized(payload.roomId, userId)) return;
+      const senderRoomId = roomManager.getSocketRoomId(socket.id);
+      if (senderRoomId !== payload.roomId) return;
+      if (!roomManager.isAuthorized(senderRoomId, userId)) return;
 
-      roomManager.updatePlayback(payload.roomId, { playing: false, time: payload.time });
-      socket.to(payload.roomId).emit("pause_video", { time: payload.time });
+      roomManager.updatePlayback(senderRoomId, { playing: false, time: payload.time });
+      socket.to(senderRoomId).emit("pause_video", { time: payload.time });
     });
 
     socket.on("seek_video", (data) => {
       const payload = schemas.validateSocketPayload(schemas.roomTimeSchema, data, socket);
       if (!payload) return;
-      if (!roomManager.isAuthorized(payload.roomId, userId)) return;
+      const senderRoomId = roomManager.getSocketRoomId(socket.id);
+      if (senderRoomId !== payload.roomId) return;
+      if (!roomManager.isAuthorized(senderRoomId, userId)) return;
 
-      roomManager.updatePlayback(payload.roomId, { time: payload.time });
-      socket.to(payload.roomId).emit("seek_video", { time: payload.time });
+      roomManager.updatePlayback(senderRoomId, { time: payload.time });
+      socket.to(senderRoomId).emit("seek_video", { time: payload.time });
     });
 
     socket.on("change_video", (data) => {
       const payload = schemas.validateSocketPayload(schemas.changeVideoSchema, data, socket);
       if (!payload) return;
-      if (!roomManager.isAuthorized(payload.roomId, userId)) return;
+      const senderRoomId = roomManager.getSocketRoomId(socket.id);
+      if (senderRoomId !== payload.roomId) return;
+      if (!roomManager.isAuthorized(senderRoomId, userId)) return;
 
-      roomManager.updatePlayback(payload.roomId, { url: payload.url, time: 0 });
-      socket.to(payload.roomId).emit("change_video", { url: payload.url });
+      roomManager.updatePlayback(senderRoomId, { url: payload.url, time: 0 });
+      socket.to(senderRoomId).emit("change_video", { url: payload.url });
     });
 
     socket.on("request_sync", (data) => {
       const payload = schemas.validateSocketPayload(schemas.roomOnlySchema, data, socket);
       if (!payload) return;
+      const senderRoomId = roomManager.getSocketRoomId(socket.id);
+      if (senderRoomId !== payload.roomId) return;
       
-      const room = roomManager.getRoom(payload.roomId);
+      const room = roomManager.getRoom(senderRoomId);
       if (room) {
         socket.emit("sync_response", room.playback);
       }
@@ -155,8 +165,10 @@ export const setupSocketHandlers = (io: Server) => {
     socket.on("make_cohost", async (data) => {
       const payload = schemas.validateSocketPayload(schemas.makeCohostSchema, data, socket);
       if (!payload) return;
+      const senderRoomId = roomManager.getSocketRoomId(socket.id);
+      if (senderRoomId !== payload.roomId) return;
       
-      const room = roomManager.getRoom(payload.roomId);
+      const room = roomManager.getRoom(senderRoomId);
       if (!room) return;
       
       // ONLY the HOST can make someone a co-host
@@ -169,9 +181,9 @@ export const setupSocketHandlers = (io: Server) => {
       const targetUserId = targetSocket?.data?.userId;
       if (!targetUserId) return;
 
-      const success = await roomManager.makeCoHost(payload.roomId, targetUserId);
+      const success = await roomManager.makeCoHost(senderRoomId, targetUserId);
       if (success) {
-        io.to(payload.roomId).emit("new_cohost", { userId: targetUserId });
+        io.to(senderRoomId).emit("new_cohost", { userId: targetUserId });
       }
     });
 
@@ -179,58 +191,97 @@ export const setupSocketHandlers = (io: Server) => {
     
     socket.on("webrtc_offer", (data) => {
       const p = schemas.validateSocketPayload(schemas.webrtcOfferAnswerSchema, data, socket);
-      if (p) socket.to(p.to).emit("webrtc_offer", { offer: p.offer, from: socket.id });
+      if (!p) return;
+      const senderRoomId = roomManager.getSocketRoomId(socket.id);
+      const targetRoomId = roomManager.getSocketRoomId(p.to);
+      if (!senderRoomId || senderRoomId !== targetRoomId) {
+        socket.emit("error", { message: "Unauthorized cross-room signaling" });
+        return;
+      }
+      socket.to(p.to).emit("webrtc_offer", { offer: p.offer, from: socket.id });
     });
 
     socket.on("webrtc_answer", (data) => {
       const p = schemas.validateSocketPayload(schemas.webrtcOfferAnswerSchema, data, socket);
-      if (p) socket.to(p.to).emit("webrtc_answer", { answer: p.answer, from: socket.id });
+      if (!p) return;
+      const senderRoomId = roomManager.getSocketRoomId(socket.id);
+      const targetRoomId = roomManager.getSocketRoomId(p.to);
+      if (!senderRoomId || senderRoomId !== targetRoomId) return;
+      socket.to(p.to).emit("webrtc_answer", { answer: p.answer, from: socket.id });
     });
 
     socket.on("webrtc_ice_candidate", (data) => {
       const p = schemas.validateSocketPayload(schemas.webrtcCandidateSchema, data, socket);
-      if (p) socket.to(p.to).emit("webrtc_ice_candidate", { candidate: p.candidate, from: socket.id });
+      if (!p) return;
+      const senderRoomId = roomManager.getSocketRoomId(socket.id);
+      const targetRoomId = roomManager.getSocketRoomId(p.to);
+      if (!senderRoomId || senderRoomId !== targetRoomId) return;
+      socket.to(p.to).emit("webrtc_ice_candidate", { candidate: p.candidate, from: socket.id });
     });
 
     // --- AUDIO PRIORITIZATION & SCREEN SHARE ---
 
     socket.on("started_speaking", (data) => {
       const p = schemas.validateSocketPayload(schemas.roomOnlySchema, data, socket);
-      if (p) socket.to(p.roomId).emit("user_speaking", { socketId: socket.id });
+      if (!p) return;
+      const senderRoomId = roomManager.getSocketRoomId(socket.id);
+      if (senderRoomId !== p.roomId) return;
+      socket.to(senderRoomId).emit("user_speaking", { socketId: socket.id });
     });
 
     socket.on("stopped_speaking", (data) => {
       const p = schemas.validateSocketPayload(schemas.roomOnlySchema, data, socket);
-      if (p) socket.to(p.roomId).emit("user_stopped_speaking", { socketId: socket.id });
+      if (!p) return;
+      const senderRoomId = roomManager.getSocketRoomId(socket.id);
+      if (senderRoomId !== p.roomId) return;
+      socket.to(senderRoomId).emit("user_stopped_speaking", { socketId: socket.id });
     });
 
     socket.on("host_announcement_start", (data) => {
       const p = schemas.validateSocketPayload(schemas.roomOnlySchema, data, socket);
-      if (p && roomManager.isAuthorized(p.roomId, userId)) {
-        socket.to(p.roomId).emit("host_announcement_start", { socketId: socket.id });
+      if (!p) return;
+      const senderRoomId = roomManager.getSocketRoomId(socket.id);
+      if (senderRoomId !== p.roomId) return;
+      if (roomManager.isAuthorized(senderRoomId, userId)) {
+        socket.to(senderRoomId).emit("host_announcement_start", { socketId: socket.id });
       }
     });
 
     socket.on("host_announcement_stop", (data) => {
       const p = schemas.validateSocketPayload(schemas.roomOnlySchema, data, socket);
-      if (p && roomManager.isAuthorized(p.roomId, userId)) {
-        socket.to(p.roomId).emit("host_announcement_stop", { socketId: socket.id });
+      if (!p) return;
+      const senderRoomId = roomManager.getSocketRoomId(socket.id);
+      if (senderRoomId !== p.roomId) return;
+      if (roomManager.isAuthorized(senderRoomId, userId)) {
+        socket.to(senderRoomId).emit("host_announcement_stop", { socketId: socket.id });
       }
     });
 
     socket.on("participant_status", (data) => {
       const p = schemas.validateSocketPayload(schemas.participantStatusSchema, data, socket);
-      if (p) socket.to(p.roomId).emit("participant_status", { socketId: socket.id, cam: p.cam, mic: p.mic });
+      if (!p) return;
+      const senderRoomId = roomManager.getSocketRoomId(socket.id);
+      if (senderRoomId !== p.roomId) return;
+      socket.to(senderRoomId).emit("participant_status", { socketId: socket.id, cam: p.cam, mic: p.mic });
     });
 
     socket.on("screen_share_start", (data) => {
       const p = schemas.validateSocketPayload(schemas.screenShareStartSchema, data, socket);
-      if (p) socket.to(p.roomId).emit("screen_share_start", { socketId: socket.id, streamId: p.streamId });
+      if (!p) return;
+      const senderRoomId = roomManager.getSocketRoomId(socket.id);
+      if (!senderRoomId || senderRoomId !== p.roomId) {
+        socket.emit("error", { message: "Unauthorized screen share" });
+        return;
+      }
+      socket.to(senderRoomId).emit("screen_share_start", { socketId: socket.id, streamId: p.streamId });
     });
 
     socket.on("screen_share_stop", (data) => {
       const p = schemas.validateSocketPayload(schemas.roomOnlySchema, data, socket);
-      if (p) socket.to(p.roomId).emit("screen_share_stop", { socketId: socket.id });
+      if (!p) return;
+      const senderRoomId = roomManager.getSocketRoomId(socket.id);
+      if (senderRoomId !== p.roomId) return;
+      socket.to(senderRoomId).emit("screen_share_stop", { socketId: socket.id });
     });
 
     socket.on("disconnect", () => {
