@@ -21,6 +21,7 @@ model User {
   participants  Participant[]
   coHostedRooms RoomCoHost[]
   messages      Message[]
+  roomHistory   RoomHistoryEntry[]
 
   friends       Friend[]      @relation("UserFriends")
   friendOf      Friend[]      @relation("FriendUsers")
@@ -28,6 +29,7 @@ model User {
 
 model Room {
   id              String        @id @default(uuid())
+  displayId       String?       @unique
   name            String
   description     String?
   isPrivate       Boolean       @default(false)
@@ -38,9 +40,13 @@ model Room {
   host            User          @relation("HostRooms", fields: [hostId], references: [id])
   createdAt       DateTime      @default(now())
   
+  playbackUrl     String?
+  playbackTime    Float?        @default(0)
+
   participants    Participant[]
   coHosts         RoomCoHost[]
   messages        Message[]
+  historyEntries  RoomHistoryEntry[]
 }
 
 model RoomCoHost {
@@ -62,6 +68,18 @@ model Participant {
   joinedAt      DateTime      @default(now())
   
   user          User          @relation(fields: [userId], references: [id])
+  room          Room          @relation(fields: [roomId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, roomId])
+}
+
+model RoomHistoryEntry {
+  id            String        @id @default(uuid())
+  userId        String
+  roomId        String
+  visitedAt     DateTime      @default(now())
+  
+  user          User          @relation(fields: [userId], references: [id], onDelete: Cascade)
   room          Room          @relation(fields: [roomId], references: [id], onDelete: Cascade)
 
   @@unique([userId, roomId])
