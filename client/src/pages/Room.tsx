@@ -148,22 +148,54 @@ export default function Room() {
   const handleMouseEnterBottom = () => setHoverZones(p => ({ ...p, bottom: true }));
 
   useEffect(() => {
+    if (!user) {
+      navigate("/login", { state: { from: location.pathname } });
+      return;
+    }
+
     if (id) {
       api.get(`/rooms/${id}`).then((res) => {
         if (res.data.room) {
           setRoomCreatedAt(res.data.room.createdAt);
           setRoomDisplayId(res.data.room.displayId);
           setRoomName(res.data.room.name);
-          if (user) {
-            if (res.data.room.hostId === user.id) {
-              setIsHost(true);
-            } else if (res.data.room.coHosts?.some((ch: { userId: string }) => ch.userId === user.id)) {
-              setIsHost(true); // Co-hosts get host privileges
+          
+          let isUserHost = false;
+          if (res.data.room.hostId === user.id) {
+            isUserHost = true;
+          } else if (res.data.room.coHosts?.some((ch: { userId: string }) => ch.userId === user.id)) {
+            isUserHost = true;
+          }
+          setIsHost(isUserHost);
+
+          let pwd = undefined;
+          if (res.data.room.isPrivate && !isUserHost) {
+            pwd = window.prompt("This room is private. Please enter the password:") || undefined;
+            if (pwd === undefined) {
+              navigate("/dashboard");
+              return;
             }
           }
+
+          connect();
+          getLocalStream().then(() => {
+            joinRoom(id, user.id, user.name, pwd);
+          });
         }
-      }).catch(err => console.error("Failed to fetch room", err));
+      }).catch(err => {
+        console.error("Failed to fetch room", err);
+        navigate("/dashboard");
+      });
     }
+
+    return () => {
+      if (id && user) {
+        leaveRoom(id, user.id, user.name);
+      }
+      clearMessages();
+      disconnect();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, user]);
 
   useEffect(() => {
@@ -211,29 +243,6 @@ export default function Room() {
     }, 1000);
     return () => clearInterval(interval);
   }, [roomCreatedAt]);
-
-  useEffect(() => {
-    if (!user) {
-      navigate("/login", { state: { from: location.pathname } });
-      return;
-    }
-
-    if (id) {
-      connect();
-      getLocalStream().then(() => {
-        joinRoom(id, user.id, user.name);
-      });
-    }
-
-    return () => {
-      if (id && user) {
-        leaveRoom(id, user.id, user.name);
-      }
-      clearMessages();
-      disconnect();
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id, user]);
 
   useVoiceActivityDetection(id, localStreamState);
 

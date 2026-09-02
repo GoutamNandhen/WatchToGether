@@ -9,6 +9,7 @@ export const joinRoomSchema = z.object({
   roomId: z.string().uuid(),
   userId: z.string().uuid(),
   userName: z.string().min(1).max(50),
+  password: z.string().optional(),
 });
 
 export const sendMessageSchema = z.object({

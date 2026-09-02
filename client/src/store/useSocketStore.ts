@@ -16,7 +16,7 @@ interface SocketState {
   participants: { userId: string; userName: string }[];
   connect: () => void;
   disconnect: () => void;
-  joinRoom: (roomId: string, userId: string, userName: string) => void;
+  joinRoom: (roomId: string, userId: string, userName: string, password?: string) => void;
   leaveRoom: (roomId: string, userId: string, userName: string) => void;
   sendMessage: (roomId: string, userId: string, userName: string, content: string) => void;
   addMessage: (message: Message) => void;
@@ -66,10 +66,10 @@ export const useSocketStore = create<SocketState>((set, get) => ({
     }
   },
 
-  joinRoom: (roomId, userId, userName) => {
+  joinRoom: (roomId, userId, userName, password) => {
     const { socket } = get();
     if (socket) {
-      socket.emit('join_room', { roomId, userId, userName });
+      socket.emit('join_room', { roomId, userId, userName, password });
     }
   },
 

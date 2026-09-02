@@ -38,12 +38,44 @@ export const setupSocketHandlers = (io: Server) => {
       const payload = schemas.validateSocketPayload(schemas.joinRoomSchema, data, socket);
       if (!payload) return;
       
-      const { roomId, userName } = payload;
+      const { roomId, userName, password } = payload;
       
       // Ensure the user joins the room with their authenticated userId, not whatever they pass
       if (payload.userId !== userId) {
         socket.emit("error", { message: "Unauthorized userId mismatch" });
         return;
+      }
+
+      // Authoritative check
+      const roomAuth = await prisma.room.findUnique({
+        where: { id: roomId },
+        select: { isPrivate: true, password: true, hostId: true }
+      });
+
+      if (!roomAuth) {
+        socket.emit("error", { message: "Room not found" });
+        return;
+      }
+
+      if (roomAuth.isPrivate) {
+        // Only require password if the user is not the host
+        if (roomAuth.hostId !== userId) {
+          // Check if user is a co-host, they bypass password
+          const cohost = await prisma.roomCoHost.findUnique({
+            where: { roomId_userId: { roomId, userId } }
+          });
+          
+          if (!cohost) {
+            if (!password) {
+              socket.emit("error", { message: "Password required for private room" });
+              return;
+            }
+            if (roomAuth.password && roomAuth.password !== password) {
+              socket.emit("error", { message: "Incorrect password" });
+              return;
+            }
+          }
+        }
       }
 
       const success = await roomManager.handleJoin(roomId, socket.id, userId, userName);

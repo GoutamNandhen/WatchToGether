@@ -18,8 +18,15 @@ export function useWebRTC(roomId: string) {
   const localStream = useRef<MediaStream | null>(null);
   const screenStreamRef = useRef<MediaStream | null>(null);
   const peerConnections = useRef<PeerConnection>({});
+  const mediaPromise = useRef<Promise<MediaStream | null> | null>(null);
+  const pendingCandidates = useRef<Record<string, RTCIceCandidateInit[]>>({});
 
   const getLocalStream = async () => {
+    let resolveMedia: (stream: MediaStream | null) => void;
+    if (!mediaPromise.current) {
+      mediaPromise.current = new Promise((res) => { resolveMedia = res; });
+    }
+
     try {
       const savedVideo = localStorage.getItem('wt_pref_camera') !== 'false';
       const savedAudio = localStorage.getItem('wt_pref_mic') !== 'false';
@@ -40,9 +47,11 @@ export function useWebRTC(roomId: string) {
 
       localStream.current = stream;
       setLocalStreamState(stream);
+      if (resolveMedia!) resolveMedia(stream);
       return stream;
     } catch (err) {
       console.error("Failed to get any local stream", err);
+      if (resolveMedia!) resolveMedia(null);
       return null;
     }
   };
@@ -104,12 +113,24 @@ export function useWebRTC(roomId: string) {
       return pc;
     };
 
+    const waitForMedia = async () => {
+      if (localStream.current) return true;
+      if (mediaPromise.current) {
+        await mediaPromise.current;
+        return !!localStream.current;
+      }
+      return false;
+    };
+
     socket.on("user_joined", async ({ socketId }) => {
-      if (!isMounted || !localStream.current) return;
-      createPeerConnection(socketId, localStream.current);
+      if (!isMounted) return;
+      const ready = await waitForMedia();
+      if (!isMounted || !ready) return;
+      
+      createPeerConnection(socketId, localStream.current!);
       // broadcast our current status to the new user
-      const cam = localStream.current.getVideoTracks()[0]?.enabled ?? false;
-      const mic = localStream.current.getAudioTracks()[0]?.enabled ?? false;
+      const cam = localStream.current!.getVideoTracks()[0]?.enabled ?? false;
+      const mic = localStream.current!.getAudioTracks()[0]?.enabled ?? false;
       socket.emit("participant_status", { roomId, cam, mic });
     });
 
@@ -119,14 +140,25 @@ export function useWebRTC(roomId: string) {
     });
 
     socket.on("webrtc_offer", async ({ offer, from }) => {
-      if (!isMounted || !localStream.current) return;
+      if (!isMounted) return;
+      const ready = await waitForMedia();
+      if (!isMounted || !ready) return;
+      
       let pc = peerConnections.current[from];
       if (!pc) {
-        pc = createPeerConnection(from, localStream.current);
+        pc = createPeerConnection(from, localStream.current!);
       }
       try {
         await pc.setRemoteDescription(new RTCSessionDescription(offer));
         if (!isMounted) return;
+        
+        // Drain any buffered ICE candidates that arrived before the offer
+        const candidates = pendingCandidates.current[from] || [];
+        pendingCandidates.current[from] = [];
+        for (const c of candidates) {
+          await pc.addIceCandidate(new RTCIceCandidate(c)).catch(console.error);
+        }
+
         const answer = await pc.createAnswer();
         await pc.setLocalDescription(answer);
         if (!isMounted) return;
@@ -138,6 +170,9 @@ export function useWebRTC(roomId: string) {
 
     socket.on("webrtc_answer", async ({ answer, from }) => {
       if (!isMounted) return;
+      const ready = await waitForMedia();
+      if (!isMounted || !ready) return;
+      
       const pc = peerConnections.current[from];
       if (pc) {
         try {
@@ -150,13 +185,20 @@ export function useWebRTC(roomId: string) {
 
     socket.on("webrtc_ice_candidate", async ({ candidate, from }) => {
       if (!isMounted) return;
+      const ready = await waitForMedia();
+      if (!isMounted || !ready) return;
+      
       const pc = peerConnections.current[from];
-      if (pc) {
+      if (pc && pc.remoteDescription) {
         try {
           await pc.addIceCandidate(new RTCIceCandidate(candidate));
         } catch (err) {
           console.error("Failed to add ICE candidate", err);
         }
+      } else {
+        // Buffer ICE candidate if peer connection or remote description isn't ready
+        if (!pendingCandidates.current[from]) pendingCandidates.current[from] = [];
+        pendingCandidates.current[from].push(candidate);
       }
     });
 
