@@ -18,7 +18,7 @@ export default function Room() {
   const location = useLocation();
   const { user } = useAuthStore();
   const navigate = useNavigate();
-  const { socket, connect, disconnect, joinRoom, leaveRoom, sendMessage, messages, clearMessages } = useSocketStore();
+  const { socket, connect, disconnect, joinRoom, leaveRoom, sendMessage, messages, clearMessages, connectionStatus, reconnectError } = useSocketStore();
   const [chatInput, setChatInput] = useState("");
   const chatRef = useRef<HTMLDivElement>(null);
   const { getLocalStream, localStream, localStreamState, screenStreamState, peers, peerStatuses, screenShares, toggleAudio, toggleVideo, shareScreen, broadcastMediaStream } = useWebRTC(id || "");
@@ -339,6 +339,23 @@ export default function Room() {
             <div className="absolute top-4 left-1/2 -translate-x-1/2 z-50 bg-red-600 text-white px-6 py-2 rounded-full font-bold shadow-[0_0_20px_rgba(220,38,38,0.6)] animate-pulse flex items-center gap-2">
               <Mic2 size={18} />
               Host is Speaking
+            </div>
+          )}
+          {connectionStatus === 'reconnecting' && !reconnectError && (
+            <div className="absolute top-16 left-1/2 -translate-x-1/2 z-50 bg-amber-600/90 text-white px-4 py-1.5 rounded-full text-xs font-semibold shadow-lg backdrop-blur flex items-center gap-2 pointer-events-none animate-pulse">
+              <span className="w-2 h-2 rounded-full bg-white animate-ping" />
+              Reconnecting to room...
+            </div>
+          )}
+          {reconnectError && (
+            <div className="absolute top-16 left-1/2 -translate-x-1/2 z-50 bg-red-600/95 text-white px-4 py-1.5 rounded-full text-xs font-semibold shadow-lg backdrop-blur flex items-center gap-2 pointer-events-auto">
+              <span>Connection error: {reconnectError}</span>
+              <button
+                onClick={() => window.location.reload()}
+                className="underline font-bold hover:text-red-100 ml-1"
+              >
+                Retry
+              </button>
             </div>
           )}
 

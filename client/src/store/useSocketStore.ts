@@ -10,10 +10,20 @@ export interface Message {
   createdAt: string;
 }
 
+export interface RoomSession {
+  roomId: string;
+  userId: string;
+  userName: string;
+  password?: string;
+}
+
 interface SocketState {
   socket: Socket | null;
   messages: Message[];
   participants: { userId: string; userName: string }[];
+  connectionStatus: 'connected' | 'disconnected' | 'reconnecting';
+  reconnectError: string | null;
+  currentRoomSession: RoomSession | null;
   connect: () => void;
   disconnect: () => void;
   joinRoom: (roomId: string, userId: string, userName: string, password?: string) => void;
@@ -27,19 +37,42 @@ export const useSocketStore = create<SocketState>((set, get) => ({
   socket: null,
   messages: [],
   participants: [],
+  connectionStatus: 'disconnected',
+  reconnectError: null,
+  currentRoomSession: null,
   
   connect: () => {
     if (!get().socket) {
       const url = import.meta.env.VITE_API_URL || 'http://localhost:5000';
-      const token = useAuthStore.getState().token;
       
       const socket = io(url, {
-        auth: { token },
+        auth: (cb) => {
+          cb({ token: useAuthStore.getState().token });
+        },
         reconnection: true,
         reconnectionAttempts: Infinity,
         reconnectionDelay: 1000,
         reconnectionDelayMax: 5000,
         timeout: 20000,
+      });
+
+      socket.on('connect', () => {
+        set({ connectionStatus: 'connected', reconnectError: null });
+        const { currentRoomSession } = get();
+        // If we were inside an active room session, automatically rejoin
+        if (currentRoomSession) {
+          socket.emit('join_room', currentRoomSession);
+        }
+      });
+
+      socket.on('disconnect', (reason) => {
+        console.warn("Socket disconnected:", reason);
+        set({ connectionStatus: 'reconnecting' });
+      });
+
+      socket.on('connect_error', (err) => {
+        console.error("Socket Connect Error:", err);
+        set({ connectionStatus: 'reconnecting', reconnectError: err.message || "Failed to connect to server" });
       });
       
       socket.on('receive_message', (message: Message) => {
@@ -48,13 +81,15 @@ export const useSocketStore = create<SocketState>((set, get) => ({
       
       socket.on('error', (err: unknown) => {
         console.error("Socket Error:", err);
+        const errorMsg = typeof err === 'object' && err !== null && 'message' in err
+          ? String((err as { message?: string }).message)
+          : String(err);
+        if (errorMsg.includes("Password") || errorMsg.includes("Unauthorized") || errorMsg.includes("Room not found")) {
+          set({ reconnectError: errorMsg });
+        }
       });
 
-      socket.on('connect_error', (err: unknown) => {
-        console.error("Socket Connect Error:", err);
-      });
-
-      set({ socket });
+      set({ socket, connectionStatus: socket.connected ? 'connected' : 'reconnecting' });
     }
   },
 
@@ -62,18 +97,21 @@ export const useSocketStore = create<SocketState>((set, get) => ({
     const { socket } = get();
     if (socket) {
       socket.disconnect();
-      set({ socket: null });
+      set({ socket: null, currentRoomSession: null, connectionStatus: 'disconnected', reconnectError: null });
     }
   },
 
   joinRoom: (roomId, userId, userName, password) => {
+    const session: RoomSession = { roomId, userId, userName, password };
+    set({ currentRoomSession: session, reconnectError: null });
     const { socket } = get();
-    if (socket) {
-      socket.emit('join_room', { roomId, userId, userName, password });
+    if (socket && socket.connected) {
+      socket.emit('join_room', session);
     }
   },
 
   leaveRoom: (roomId, userId, userName) => {
+    set({ currentRoomSession: null, reconnectError: null });
     const { socket } = get();
     if (socket) {
       socket.emit('leave_room', { roomId, userId, userName });

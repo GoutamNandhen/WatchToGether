@@ -82,7 +82,9 @@ export function useWebRTC(roomId: string) {
 
       pc.onnegotiationneeded = async () => {
         try {
+          if (pc.signalingState !== "stable") return;
           const offer = await pc.createOffer();
+          if (pc.signalingState !== "stable") return;
           await pc.setLocalDescription(offer);
           socket?.emit("webrtc_offer", { offer, to: peerSocketId, from: socket.id });
         } catch (err) {
@@ -92,10 +94,14 @@ export function useWebRTC(roomId: string) {
 
       pc.ontrack = (event) => {
         setPeers((prev) => {
-          const streamId = event.streams[0].id;
-          const exists = prev.find((p) => p.stream.id === streamId);
-          if (exists) return prev;
-          return [...prev, { socketId: peerSocketId, stream: event.streams[0] }];
+          const stream = event.streams[0];
+          if (!stream) return prev;
+          const streamId = stream.id;
+          const exists = prev.some((p) => p.socketId === peerSocketId || p.stream.id === streamId);
+          if (exists) {
+            return prev.map((p) => (p.socketId === peerSocketId ? { ...p, stream } : p));
+          }
+          return [...prev, { socketId: peerSocketId, stream }];
         });
       };
 
@@ -127,6 +133,16 @@ export function useWebRTC(roomId: string) {
       const ready = await waitForMedia();
       if (!isMounted || !ready) return;
       
+      // Clean up any pre-existing connection for this socketId if present
+      if (peerConnections.current[socketId]) {
+        const oldPc = peerConnections.current[socketId];
+        oldPc.onicecandidate = null;
+        oldPc.onnegotiationneeded = null;
+        oldPc.ontrack = null;
+        oldPc.close();
+        delete peerConnections.current[socketId];
+      }
+
       createPeerConnection(socketId, localStream.current!);
       // broadcast our current status to the new user
       const cam = localStream.current!.getVideoTracks()[0]?.enabled ?? false;
@@ -211,8 +227,19 @@ export function useWebRTC(roomId: string) {
         pc.ontrack = null;
         pc.close();
         delete peerConnections.current[socketId];
-        setPeers((prev) => prev.filter((p) => p.socketId !== socketId));
       }
+      delete pendingCandidates.current[socketId];
+      setPeers((prev) => prev.filter((p) => p.socketId !== socketId));
+      setPeerStatuses((prev) => {
+        const next = { ...prev };
+        delete next[socketId];
+        return next;
+      });
+      setScreenShares((prev) => {
+        const next = { ...prev };
+        delete next[socketId];
+        return next;
+      });
     });
 
     socket.on("screen_share_start", ({ socketId, streamId }) => {
@@ -239,6 +266,7 @@ export function useWebRTC(roomId: string) {
         pc.close();
       });
       peerConnections.current = {};
+      pendingCandidates.current = {};
       setPeers([]);
       setPeerStatuses({});
       setScreenShares({});

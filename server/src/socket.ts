@@ -127,13 +127,13 @@ export const setupSocketHandlers = (io: Server) => {
       }
     });
 
-    socket.on("leave_room", (data) => {
+    socket.on("leave_room", async (data) => {
       const payload = schemas.validateSocketPayload(schemas.joinRoomSchema, data, socket);
       if (!payload) return;
       if (payload.userId !== userId) return;
 
       socket.leave(payload.roomId);
-      roomManager.handleDisconnect(socket.id); // This will handle the delay and DB removal
+      await roomManager.handleLeave(payload.roomId, socket.id, userId);
     });
 
     // --- HOST/CO-HOST PRIVILEGED EVENTS ---

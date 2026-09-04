@@ -85,13 +85,29 @@ export class RoomManager {
     const room = await this.getOrCreateRoom(roomId);
     if (!room) return false;
 
-    // Check if they were in disconnected state and cancel the timeout
+    // Check if user was in disconnected state and cancel the timeout
+    const staleSocketIds: string[] = [];
     for (const [discSocketId, data] of room.disconnectedParticipants.entries()) {
       if (data.userId === userId) {
         clearTimeout(data.timeout);
         room.disconnectedParticipants.delete(discSocketId);
-        break;
+        staleSocketIds.push(discSocketId);
       }
+    }
+
+    // Check if user already had another active socket in the room and clean it up
+    for (const [sId, uId] of room.participants.entries()) {
+      if (uId === userId && sId !== socketId) {
+        room.participants.delete(sId);
+        if (!staleSocketIds.includes(sId)) {
+          staleSocketIds.push(sId);
+        }
+      }
+    }
+
+    // Inform existing participants to tear down WebRTC/peer state for any stale socket IDs
+    for (const staleId of staleSocketIds) {
+      this.io.to(roomId).emit("user_left", { userId, socketId: staleId });
     }
 
     room.participants.set(socketId, userId);
@@ -123,6 +139,12 @@ export class RoomManager {
         const userId = room.participants.get(socketId)!;
         room.participants.delete(socketId);
 
+        // If the user still has another active socket in the room, do not schedule removal
+        const hasOtherActiveSocket = Array.from(room.participants.values()).includes(userId);
+        if (hasOtherActiveSocket) {
+          return;
+        }
+
         // Schedule permanent removal
         const timeout = setTimeout(async () => {
           room.disconnectedParticipants.delete(socketId);
@@ -133,6 +155,21 @@ export class RoomManager {
         this.io.to(roomId).emit("user_disconnected_temp", { socketId, userId });
       }
     }
+  }
+
+  public async handleLeave(roomId: string, socketId: string, userId: string) {
+    const room = this.rooms.get(roomId);
+    if (!room) return;
+
+    for (const [discSocketId, data] of room.disconnectedParticipants.entries()) {
+      if (data.userId === userId) {
+        clearTimeout(data.timeout);
+        room.disconnectedParticipants.delete(discSocketId);
+      }
+    }
+
+    room.participants.delete(socketId);
+    await this.permanentlyRemoveUser(roomId, userId, socketId);
   }
 
   private async permanentlyRemoveUser(roomId: string, userId: string, oldSocketId: string) {
