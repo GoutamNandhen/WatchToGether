@@ -91,8 +91,9 @@ export const setupSocketHandlers = (io: Server) => {
       
       // Send the current authoritative state to the joining user
       if (room) {
-        socket.emit("sync_response", room.playback);
+        socket.emit("sync_response", { ...room.playback, serverTime: Date.now() });
         socket.emit("room_state", { hostId: room.hostId, coHosts: Array.from(room.coHosts) });
+        socket.emit("room_participant_statuses", roomManager.getParticipantStatuses(roomId));
       }
 
       // Broadcast to room that a user joined
@@ -146,7 +147,7 @@ export const setupSocketHandlers = (io: Server) => {
       if (!roomManager.isAuthorized(senderRoomId, userId)) return;
 
       roomManager.updatePlayback(senderRoomId, { playing: true, time: payload.time });
-      socket.to(senderRoomId).emit("play_video", { time: payload.time });
+      socket.to(senderRoomId).emit("play_video", { time: payload.time, serverTime: Date.now() });
     });
 
     socket.on("pause_video", (data) => {
@@ -157,7 +158,7 @@ export const setupSocketHandlers = (io: Server) => {
       if (!roomManager.isAuthorized(senderRoomId, userId)) return;
 
       roomManager.updatePlayback(senderRoomId, { playing: false, time: payload.time });
-      socket.to(senderRoomId).emit("pause_video", { time: payload.time });
+      socket.to(senderRoomId).emit("pause_video", { time: payload.time, serverTime: Date.now() });
     });
 
     socket.on("seek_video", (data) => {
@@ -168,7 +169,24 @@ export const setupSocketHandlers = (io: Server) => {
       if (!roomManager.isAuthorized(senderRoomId, userId)) return;
 
       roomManager.updatePlayback(senderRoomId, { time: payload.time });
-      socket.to(senderRoomId).emit("seek_video", { time: payload.time });
+      socket.to(senderRoomId).emit("seek_video", { time: payload.time, serverTime: Date.now() });
+    });
+
+    socket.on("sync_time", (data) => {
+      const payload = schemas.validateSocketPayload(schemas.syncTimeSchema, data, socket);
+      if (!payload) return;
+      const senderRoomId = roomManager.getSocketRoomId(socket.id);
+      if (senderRoomId !== payload.roomId) return;
+      if (!roomManager.isAuthorized(senderRoomId, userId)) return;
+
+      roomManager.updatePlayback(senderRoomId, {
+        time: payload.time,
+        ...(payload.playing !== undefined ? { playing: payload.playing } : {}),
+      });
+      const room = roomManager.getRoom(senderRoomId);
+      if (room) {
+        socket.to(senderRoomId).emit("sync_response", { ...room.playback, serverTime: Date.now() });
+      }
     });
 
     socket.on("change_video", (data) => {
@@ -190,7 +208,7 @@ export const setupSocketHandlers = (io: Server) => {
       
       const room = roomManager.getRoom(senderRoomId);
       if (room) {
-        socket.emit("sync_response", room.playback);
+        socket.emit("sync_response", { ...room.playback, serverTime: Date.now() });
       }
     });
 
@@ -294,6 +312,7 @@ export const setupSocketHandlers = (io: Server) => {
       if (!p) return;
       const senderRoomId = roomManager.getSocketRoomId(socket.id);
       if (senderRoomId !== p.roomId) return;
+      roomManager.updateParticipantStatus(senderRoomId, socket.id, p.cam, p.mic);
       socket.to(senderRoomId).emit("participant_status", { socketId: socket.id, cam: p.cam, mic: p.mic });
     });
 
@@ -321,4 +340,5 @@ export const setupSocketHandlers = (io: Server) => {
       roomManager.handleDisconnect(socket.id);
     });
   });
+  return roomManager;
 };

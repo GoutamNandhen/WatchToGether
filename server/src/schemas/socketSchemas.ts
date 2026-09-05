@@ -24,6 +24,12 @@ export const roomTimeSchema = z.object({
   time: z.number().min(0),
 });
 
+export const syncTimeSchema = z.object({
+  roomId: z.string().uuid(),
+  time: z.number().min(0),
+  playing: z.boolean().optional(),
+});
+
 export const changeVideoSchema = z.object({
   roomId: z.string().uuid(),
   url: z.string().url().or(z.literal("")),

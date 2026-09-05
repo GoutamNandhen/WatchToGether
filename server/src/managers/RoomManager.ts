@@ -3,11 +3,12 @@ import { Server } from "socket.io";
 
 const prisma = new PrismaClient();
 
-interface PlaybackState {
+export interface PlaybackState {
   playing: boolean;
   time: number;
   url: string;
   lastUpdatedAt: number;
+  serverTime?: number;
 }
 
 interface RoomState {
@@ -15,12 +16,14 @@ interface RoomState {
   hostId: string;
   coHosts: Set<string>;
   participants: Map<string, string>; // socketId -> userId
+  participantStatuses: Map<string, { cam: boolean; mic: boolean }>;
   playback: PlaybackState;
   disconnectedParticipants: Map<string, { userId: string; timeout: NodeJS.Timeout }>;
 }
 
 export class RoomManager {
   private rooms: Map<string, RoomState> = new Map();
+  private pendingRooms: Map<string, Promise<RoomState | null>> = new Map();
   private io: Server;
 
   constructor(io: Server) {
@@ -32,34 +35,50 @@ export class RoomManager {
       return this.rooms.get(roomId)!;
     }
 
-    try {
-      const dbRoom = await prisma.room.findUnique({
-        where: { id: roomId },
-        include: { coHosts: true },
-      });
-
-      if (!dbRoom) return null;
-
-      const newRoom: RoomState = {
-        roomId,
-        hostId: dbRoom.hostId,
-        coHosts: new Set(dbRoom.coHosts.map((ch) => ch.userId)),
-        participants: new Map(),
-        disconnectedParticipants: new Map(),
-        playback: {
-          playing: false,
-          time: dbRoom.playbackTime ?? 0,
-          url: dbRoom.playbackUrl ?? "https://www.youtube.com/watch?v=aqz-KE-bpKQ",
-          lastUpdatedAt: Date.now(),
-        },
-      };
-
-      this.rooms.set(roomId, newRoom);
-      return newRoom;
-    } catch (err) {
-      console.error("Failed to load room from DB:", err);
-      return null;
+    if (this.pendingRooms.has(roomId)) {
+      return this.pendingRooms.get(roomId)!;
     }
+
+    const loadPromise = (async () => {
+      try {
+        const dbRoom = await prisma.room.findUnique({
+          where: { id: roomId },
+          include: { coHosts: true },
+        });
+
+        if (!dbRoom) return null;
+
+        if (this.rooms.has(roomId)) {
+          return this.rooms.get(roomId)!;
+        }
+
+        const newRoom: RoomState = {
+          roomId,
+          hostId: dbRoom.hostId,
+          coHosts: new Set(dbRoom.coHosts.map((ch) => ch.userId)),
+          participants: new Map(),
+          participantStatuses: new Map(),
+          disconnectedParticipants: new Map(),
+          playback: {
+            playing: false,
+            time: dbRoom.playbackTime ?? 0,
+            url: dbRoom.playbackUrl ?? "https://www.youtube.com/watch?v=aqz-KE-bpKQ",
+            lastUpdatedAt: Date.now(),
+          },
+        };
+
+        this.rooms.set(roomId, newRoom);
+        return newRoom;
+      } catch (err) {
+        console.error("Failed to load room from DB:", err);
+        return null;
+      } finally {
+        this.pendingRooms.delete(roomId);
+      }
+    })();
+
+    this.pendingRooms.set(roomId, loadPromise);
+    return loadPromise;
   }
 
   public getRoom(roomId: string): RoomState | undefined {
@@ -99,13 +118,14 @@ export class RoomManager {
     for (const [sId, uId] of room.participants.entries()) {
       if (uId === userId && sId !== socketId) {
         room.participants.delete(sId);
+        room.participantStatuses.delete(sId);
         if (!staleSocketIds.includes(sId)) {
           staleSocketIds.push(sId);
         }
       }
     }
 
-    // Inform existing participants to tear down WebRTC/peer state for any stale socket IDs
+    // If any stale socket IDs were identified, notify room to drop them
     for (const staleId of staleSocketIds) {
       this.io.to(roomId).emit("user_left", { userId, socketId: staleId });
     }
@@ -175,6 +195,8 @@ export class RoomManager {
   private async permanentlyRemoveUser(roomId: string, userId: string, oldSocketId: string) {
     const room = this.rooms.get(roomId);
     if (!room) return;
+
+    room.participantStatuses.delete(oldSocketId);
 
     // Notify room
     this.io.to(roomId).emit("user_left", { userId, socketId: oldSocketId });
@@ -272,5 +294,17 @@ export class RoomManager {
     if (room) {
       room.playback = { ...room.playback, ...update, lastUpdatedAt: Date.now() };
     }
+  }
+
+  public updateParticipantStatus(roomId: string, socketId: string, cam: boolean, mic: boolean) {
+    const room = this.rooms.get(roomId);
+    if (!room) return;
+    room.participantStatuses.set(socketId, { cam, mic });
+  }
+
+  public getParticipantStatuses(roomId: string): Record<string, { cam: boolean; mic: boolean }> {
+    const room = this.rooms.get(roomId);
+    if (!room) return {};
+    return Object.fromEntries(room.participantStatuses.entries());
   }
 }

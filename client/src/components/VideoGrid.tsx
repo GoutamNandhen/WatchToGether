@@ -14,9 +14,22 @@ interface VideoPlayerProps {
   isMicOn?: boolean;
   isPinned?: boolean;
   dataSaver?: boolean;
+  isCamOn?: boolean;
+  name?: string;
 }
 
-function StreamPlayer({ stream, isLocal, muted = false, isActiveSpeaker = false, isCircle = false, isMicOn = true, isPinned = false, dataSaver = false }: VideoPlayerProps) {
+function StreamPlayer({
+  stream,
+  isLocal,
+  muted = false,
+  isActiveSpeaker = false,
+  isCircle = false,
+  isMicOn = true,
+  isPinned = false,
+  dataSaver = false,
+  isCamOn = true,
+  name,
+}: VideoPlayerProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
 
   useEffect(() => {
@@ -25,41 +38,72 @@ function StreamPlayer({ stream, isLocal, muted = false, isActiveSpeaker = false,
     }
   }, [stream]);
 
+  const showVideo = isCamOn && (!dataSaver || isLocal);
+
   return (
-    <div className={`relative overflow-hidden bg-slate-900 w-full h-full shadow-lg transition-all duration-300 ${isCircle ? 'rounded-full aspect-square' : 'rounded-xl aspect-video'} ${isActiveSpeaker ? 'ring-4 ring-green-500 shadow-green-500/20' : 'border border-slate-800'}`}>
-      {(!dataSaver || isLocal) ? (
-        <video
-          ref={videoRef}
-          autoPlay
-          playsInline
-          muted={isLocal || muted}
-          className={`w-full h-full object-cover ${isLocal ? 'scale-x-[-1]' : ''}`}
-        />
-      ) : (
-        <div className="w-full h-full flex flex-col items-center justify-center bg-slate-800/80">
-          <div className="w-16 h-16 rounded-full bg-slate-700 flex items-center justify-center border-4 border-slate-600 shadow-inner mb-2">
-            <VideoOff size={24} className="text-slate-500" />
+    <div
+      className={`relative overflow-hidden bg-slate-900 w-full h-full shadow-lg transition-all duration-300 ${
+        isCircle ? "rounded-full aspect-square" : "rounded-xl aspect-video"
+      } ${isActiveSpeaker ? "ring-4 ring-green-500 shadow-green-500/20" : "border border-slate-800"}`}
+    >
+      <video
+        ref={videoRef}
+        autoPlay
+        playsInline
+        muted={isLocal || muted}
+        className={`w-full h-full object-cover ${isLocal ? "scale-x-[-1]" : ""} ${
+          !showVideo ? "opacity-0 pointer-events-none absolute inset-0" : ""
+        }`}
+      />
+
+      {!showVideo && (
+        <div className="absolute inset-0 w-full h-full flex flex-col items-center justify-center bg-slate-900/95 text-slate-400 select-none z-10">
+          <div
+            className={`rounded-full bg-slate-800/90 border border-slate-700 flex items-center justify-center shadow-inner ${
+              isCircle ? "w-12 h-12 mb-1" : "w-14 h-14 mb-2"
+            }`}
+          >
+            <VideoOff size={isCircle ? 20 : 24} className="text-slate-500" />
           </div>
-          <span className="text-xs text-slate-400 font-medium tracking-widest uppercase">Data Saver</span>
+          <span className="text-xs text-slate-400 font-medium tracking-wide">
+            {dataSaver && !isLocal ? "Data Saver" : (name ? `${name} (Camera Off)` : "Camera Off")}
+          </span>
         </div>
       )}
+
       {isActiveSpeaker && (
-        <div className={`absolute ${isCircle ? 'top-4 right-4' : 'top-2 right-2'} bg-green-500 text-white p-1 rounded-full animate-pulse shadow-lg z-20`}>
+        <div
+          className={`absolute ${
+            isCircle ? "top-4 right-4" : "top-2 right-2"
+          } bg-green-500 text-white p-1 rounded-full animate-pulse shadow-lg z-20`}
+        >
           <Mic size={14} />
         </div>
       )}
       {!isMicOn && (
-        <div className={`absolute ${isCircle ? 'bottom-4 left-4' : 'bottom-2 left-2'} bg-red-500 text-white p-1 rounded-md shadow-lg z-20`}>
+        <div
+          className={`absolute ${
+            isCircle ? "bottom-4 left-4" : "bottom-2 left-2"
+          } bg-red-500 text-white p-1 rounded-md shadow-lg z-20`}
+        >
           <MicOff size={14} />
         </div>
       )}
       {isPinned && (
-        <div className={`absolute ${isCircle ? 'top-4 left-4' : 'top-2 left-2'} bg-indigo-500 text-white p-1.5 rounded-full shadow-lg z-20`}>
+        <div
+          className={`absolute ${
+            isCircle ? "top-4 left-4" : "top-2 left-2"
+          } bg-indigo-500 text-white p-1.5 rounded-full shadow-lg z-20`}
+        >
           <Pin size={12} className="fill-white" />
         </div>
       )}
       {isLocal && (
-        <div className={`absolute ${isCircle ? 'bottom-4 right-4' : 'bottom-2 right-2'} bg-indigo-600 text-white text-xs px-2 py-1 rounded-md font-medium shadow z-20`}>
+        <div
+          className={`absolute ${
+            isCircle ? "bottom-4 right-4" : "bottom-2 right-2"
+          } bg-indigo-600 text-white text-xs px-2 py-1 rounded-md font-medium shadow z-20`}
+        >
           You
         </div>
       )}
@@ -86,8 +130,8 @@ interface VideoGridProps {
 }
 
 export default function VideoGrid({ localStream, screenStream, peers, peerStatuses = {}, screenShares = {}, toggleAudio, toggleVideo, shareScreen, toggleFullscreen, isFullscreen = false, floating = false, isBottomHovered = false, onMouseLeaveBottom, isHost = false, roomId }: VideoGridProps) {
-  const [audioEnabled, setAudioEnabled] = useState(true);
-  const [videoEnabled, setVideoEnabled] = useState(true);
+  const videoEnabled = !!(localStream?.getVideoTracks().some((t) => t.enabled && t.readyState === "live"));
+  const audioEnabled = !!(localStream?.getAudioTracks().some((t) => t.enabled && t.readyState === "live"));
   const [isCircle, setIsCircle] = useState(() => localStorage.getItem("vg_isCircle") === "true");
   const [viewMode, setViewMode] = useState<'list' | 'grid'>(() => (localStorage.getItem("vg_viewMode") as 'list' | 'grid') || 'grid');
   const [pinnedPeers, setPinnedPeers] = useState<string[]>([]);
@@ -104,12 +148,10 @@ export default function VideoGrid({ localStream, screenStream, peers, peerStatus
 
   const handleToggleAudio = () => {
     toggleAudio();
-    setAudioEnabled(!audioEnabled);
   };
 
   const handleToggleVideo = () => {
     toggleVideo();
-    setVideoEnabled(!videoEnabled);
   };
 
   const togglePin = (id: string) => {
@@ -188,31 +230,49 @@ export default function VideoGrid({ localStream, screenStream, peers, peerStatus
   const screenShareStreamIds = Object.values(screenShares);
 
   const allStreams = [
-    ...(localStream ? [{ id: 'local', stream: localStream, isLocal: true, isActive: socket ? activeSpeakers.includes(socket.id || '') : false, isCamOn: videoEnabled, isMicOn: audioEnabled }] : []),
+    ...(localStream
+      ? [
+          {
+            id: "local",
+            stream: localStream,
+            isLocal: true,
+            isActive: socket ? activeSpeakers.includes(socket.id || "") : false,
+            isCamOn: videoEnabled,
+            isMicOn: audioEnabled,
+            name: "You",
+          },
+        ]
+      : []),
     // We intentionally do not include screenStream or remote screen shares in floating grid. They will be rendered in Room main view.
     ...peers
-      .filter(p => !screenShareStreamIds.includes(p.stream.id))
-      .map(p => ({ 
-        id: p.socketId, 
-        stream: p.stream, 
-        isLocal: false, 
+      .filter((p) => !screenShareStreamIds.includes(p.stream.id))
+      .map((p) => ({
+        id: p.socketId,
+        stream: p.stream,
+        isLocal: false,
         isActive: activeSpeakers.includes(p.socketId),
-        isCamOn: peerStatuses[p.socketId]?.cam ?? true,
-        isMicOn: peerStatuses[p.socketId]?.mic ?? true,
-      }))
+        isCamOn:
+          peerStatuses[p.socketId]?.cam ??
+          p.stream.getVideoTracks().some((t) => t.enabled && t.readyState === "live" && !t.muted),
+        isMicOn:
+          peerStatuses[p.socketId]?.mic ??
+          p.stream.getAudioTracks().some((t) => t.enabled && t.readyState === "live"),
+        name: `Participant ${p.socketId.slice(0, 4)}`,
+      })),
   ];
 
-  const remoteStreams = allStreams.filter(s => !s.isLocal);
-  const localStreams = allStreams.filter(s => s.isLocal);
+  const remoteStreams = allStreams.filter((s) => !s.isLocal);
+  const localStreams = allStreams.filter((s) => s.isLocal);
 
-  const visibleRemoteStreams = floating 
+  const visibleRemoteStreams = floating
     ? remoteStreams
-        .filter(s => s.isCamOn)
         .sort((a, b) => {
           const aPinned = pinnedPeers.includes(a.id);
           const bPinned = pinnedPeers.includes(b.id);
           if (aPinned && !bPinned) return -1;
           if (!aPinned && bPinned) return 1;
+          if (a.isCamOn && !b.isCamOn) return -1;
+          if (!a.isCamOn && b.isCamOn) return 1;
           if (a.isActive && !b.isActive) return -1;
           if (!a.isActive && b.isActive) return 1;
           return 0;
@@ -220,7 +280,7 @@ export default function VideoGrid({ localStream, screenStream, peers, peerStatus
         .slice(0, maxCameras)
     : remoteStreams;
 
-  const floatingStreams = [...localStreams.filter(s => s.isCamOn), ...visibleRemoteStreams];
+  const floatingStreams = [...localStreams, ...visibleRemoteStreams];
   
   if (floating) {
     return (
@@ -246,7 +306,17 @@ export default function VideoGrid({ localStream, screenStream, peers, peerStatus
               <div className={`drag-handle absolute inset-0 z-30 opacity-0 group-hover/camera:opacity-100 bg-black/40 flex items-center justify-center cursor-move transition-opacity duration-300 ${isCircle ? 'rounded-full' : 'rounded-xl'}`}>
                 <Move className="text-white drop-shadow-lg" size={32} />
               </div>
-              <StreamPlayer stream={s.stream} isLocal={s.isLocal} isActiveSpeaker={s.isActive} isCircle={isCircle} isMicOn={s.isMicOn} isPinned={pinnedPeers.includes(s.id)} dataSaver={dataSaver} />
+              <StreamPlayer
+                stream={s.stream}
+                isLocal={s.isLocal}
+                isActiveSpeaker={s.isActive}
+                isCircle={isCircle}
+                isMicOn={s.isMicOn}
+                isPinned={pinnedPeers.includes(s.id)}
+                dataSaver={dataSaver}
+                isCamOn={s.isCamOn}
+                name={s.name}
+              />
             </div>
           </Rnd>
         ))}
@@ -305,7 +375,17 @@ export default function VideoGrid({ localStream, screenStream, peers, peerStatus
           <div className="space-y-4">
             {allStreams.map(s => (
               <div key={s.id} className={`${isCircle ? 'aspect-square w-2/3 mx-auto relative group/cam' : 'aspect-video w-full relative group/cam'}`}>
-                <StreamPlayer stream={s.stream} isLocal={s.isLocal} isActiveSpeaker={s.isActive} isCircle={isCircle} isMicOn={s.isMicOn} isPinned={pinnedPeers.includes(s.id)} dataSaver={dataSaver} />
+                <StreamPlayer
+                  stream={s.stream}
+                  isLocal={s.isLocal}
+                  isActiveSpeaker={s.isActive}
+                  isCircle={isCircle}
+                  isMicOn={s.isMicOn}
+                  isPinned={pinnedPeers.includes(s.id)}
+                  dataSaver={dataSaver}
+                  isCamOn={s.isCamOn}
+                  name={s.name}
+                />
                 {!s.isLocal && isHost && (
                   <button 
                     onClick={() => makeCoHost(s.id)}

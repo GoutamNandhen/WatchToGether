@@ -6,6 +6,23 @@ interface PeerConnection {
   [socketId: string]: RTCPeerConnection;
 }
 
+const findVideoSender = (pc: RTCPeerConnection): RTCRtpSender | undefined => {
+  if (typeof pc.getTransceivers === "function") {
+    const videoTransceiver = pc.getTransceivers().find(
+      (t) => t.receiver?.track?.kind === "video" || (t.sender?.track && t.sender.track.kind === "video")
+    );
+    if (videoTransceiver) return videoTransceiver.sender;
+  }
+  if (typeof pc.getSenders === "function") {
+    const senders = pc.getSenders();
+    const senderWithVideoTrack = senders.find((s) => s.track && s.track.kind === "video");
+    if (senderWithVideoTrack) return senderWithVideoTrack;
+    const senderWithNullTrack = senders.find((s) => s.track === null);
+    if (senderWithNullTrack) return senderWithNullTrack;
+  }
+  return undefined;
+};
+
 export function useWebRTC(roomId: string) {
   const { socket } = useSocketStore();
   const { user } = useAuthStore();
@@ -20,6 +37,7 @@ export function useWebRTC(roomId: string) {
   const peerConnections = useRef<PeerConnection>({});
   const mediaPromise = useRef<Promise<MediaStream | null> | null>(null);
   const pendingCandidates = useRef<Record<string, RTCIceCandidateInit[]>>({});
+  const toggleVideoPromiseRef = useRef<Promise<void>>(Promise.resolve());
 
   const getLocalStream = async () => {
     let resolveMedia: (stream: MediaStream | null) => void;
@@ -48,10 +66,17 @@ export function useWebRTC(roomId: string) {
       localStream.current = stream;
       setLocalStreamState(stream);
       if (resolveMedia!) resolveMedia(stream);
+
+      // Broadcast initial status once media is acquired
+      const cam = stream.getVideoTracks().some((t) => t.enabled && t.readyState === "live");
+      const mic = stream.getAudioTracks().some((t) => t.enabled && t.readyState === "live");
+      socket?.emit("participant_status", { roomId, cam, mic });
+
       return stream;
     } catch (err) {
       console.error("Failed to get any local stream", err);
       if (resolveMedia!) resolveMedia(null);
+      socket?.emit("participant_status", { roomId, cam: false, mic: false });
       return null;
     }
   };
@@ -93,6 +118,25 @@ export function useWebRTC(roomId: string) {
       };
 
       pc.ontrack = (event) => {
+        if (event.track) {
+          event.track.onmute = () => {
+            if (event.track.kind === "video") {
+              setPeerStatuses((prev) => ({
+                ...prev,
+                [peerSocketId]: { ...(prev[peerSocketId] || { mic: true }), cam: false },
+              }));
+            }
+          };
+          event.track.onunmute = () => {
+            if (event.track.kind === "video") {
+              setPeerStatuses((prev) => ({
+                ...prev,
+                [peerSocketId]: { ...(prev[peerSocketId] || { mic: true }), cam: true },
+              }));
+            }
+          };
+        }
+
         setPeers((prev) => {
           const stream = event.streams[0];
           if (!stream) return prev;
@@ -105,9 +149,20 @@ export function useWebRTC(roomId: string) {
         });
       };
 
+      const hasVideoTrack = stream.getVideoTracks().some((t) => t.readyState === "live");
       stream.getTracks().forEach((track) => {
         pc.addTrack(track, stream);
       });
+
+      // Pre-add video transceiver if no video track exists initially, so future camera ON
+      // uses replaceTrack without renegotiation
+      if (!hasVideoTrack && typeof pc.addTransceiver === "function") {
+        try {
+          pc.addTransceiver("video", { direction: "sendrecv", streams: [stream] });
+        } catch (e) {
+          console.warn("Could not pre-add video transceiver", e);
+        }
+      }
 
       if (screenStreamRef.current) {
         screenStreamRef.current.getTracks().forEach((track) => {
@@ -145,14 +200,19 @@ export function useWebRTC(roomId: string) {
 
       createPeerConnection(socketId, localStream.current!);
       // broadcast our current status to the new user
-      const cam = localStream.current!.getVideoTracks()[0]?.enabled ?? false;
-      const mic = localStream.current!.getAudioTracks()[0]?.enabled ?? false;
+      const cam = (localStream.current?.getVideoTracks() || []).some((t) => t.enabled && t.readyState === "live");
+      const mic = (localStream.current?.getAudioTracks() || []).some((t) => t.enabled && t.readyState === "live");
       socket.emit("participant_status", { roomId, cam, mic });
     });
 
     socket.on("participant_status", ({ socketId, cam, mic }) => {
       if (!isMounted) return;
-      setPeerStatuses(prev => ({ ...prev, [socketId]: { cam, mic } }));
+      setPeerStatuses((prev) => ({ ...prev, [socketId]: { cam, mic } }));
+    });
+
+    socket.on("room_participant_statuses", (statuses: Record<string, { cam: boolean; mic: boolean }>) => {
+      if (!isMounted) return;
+      setPeerStatuses((prev) => ({ ...prev, ...statuses }));
     });
 
     socket.on("webrtc_offer", async ({ offer, from }) => {
@@ -179,6 +239,11 @@ export function useWebRTC(roomId: string) {
         await pc.setLocalDescription(answer);
         if (!isMounted) return;
         socket.emit("webrtc_answer", { answer, to: from, from: socket.id });
+
+        // Broadcast our participant status so the offerer has our latest status
+        const cam = (localStream.current?.getVideoTracks() || []).some((t) => t.enabled && t.readyState === "live");
+        const mic = (localStream.current?.getAudioTracks() || []).some((t) => t.enabled && t.readyState === "live");
+        socket.emit("participant_status", { roomId, cam, mic });
       } catch (err) {
         console.error("Failed to handle offer", err);
       }
@@ -284,6 +349,7 @@ export function useWebRTC(roomId: string) {
       socket.off("webrtc_ice_candidate");
       socket.off("user_left");
       socket.off("participant_status");
+      socket.off("room_participant_statuses");
       socket.off("screen_share_start");
       socket.off("screen_share_stop");
       socket.off("disconnect", handleSocketDisconnect);
@@ -318,46 +384,69 @@ export function useWebRTC(roomId: string) {
   }, [socket, user, roomId]);
 
   const toggleVideo = async () => {
-    if (!localStream.current) return;
+    toggleVideoPromiseRef.current = toggleVideoPromiseRef.current.then(async () => {
+      if (!localStream.current) return;
 
-    const videoTrack = localStream.current.getVideoTracks()[0];
-    const mic = localStream.current.getAudioTracks()[0]?.enabled ?? false;
+      const currentVideoTrack = localStream.current.getVideoTracks().find((t) => t.readyState === "live");
+      const mic = localStream.current.getAudioTracks().some((t) => t.enabled && t.readyState === "live");
 
-    // If we have an active video track, turn it OFF completely
-    if (videoTrack && videoTrack.readyState === 'live') {
-      videoTrack.stop();
-      localStream.current.removeTrack(videoTrack);
-      localStorage.setItem('wt_pref_camera', 'false');
-      
-      socket?.emit("participant_status", { roomId, cam: false, mic });
-      // Force a state update with the new tracks
-      setLocalStreamState(new MediaStream(localStream.current.getTracks()));
-    } else {
-      // It's off, we need to request hardware access again to turn it ON
-      try {
-        const newStream = await navigator.mediaDevices.getUserMedia({ video: true });
-        const newVideoTrack = newStream.getVideoTracks()[0];
-        localStorage.setItem('wt_pref_camera', 'true');
-        
-        localStream.current.addTrack(newVideoTrack);
+      if (currentVideoTrack) {
+        // --- CAMERA OFF ---
+        // 1. Disassociate RTP senders from video track on all peer connections
+        await Promise.all(
+          Object.values(peerConnections.current).map(async (pc) => {
+            const sender = findVideoSender(pc);
+            if (sender && typeof sender.replaceTrack === "function") {
+              await sender.replaceTrack(null).catch((e) => console.warn("replaceTrack(null) error:", e));
+            }
+          })
+        );
 
-        // Replace the dead track in all existing peer connections
-        Object.values(peerConnections.current).forEach((pc) => {
-          const sender = pc.getSenders().find((s) => s.track === null || (s.track && s.track.kind === 'video'));
-          if (sender) {
-            sender.replaceTrack(newVideoTrack);
-          } else {
-            pc.addTrack(newVideoTrack, localStream.current!);
-          }
-        });
+        // 2. Stop hardware track & remove from local stream
+        currentVideoTrack.stop();
+        localStream.current.removeTrack(currentVideoTrack);
+        localStorage.setItem("wt_pref_camera", "false");
 
-        socket?.emit("participant_status", { roomId, cam: true, mic });
-        // Force a state update with the new tracks
+        // 3. Emit status & update state
+        socket?.emit("participant_status", { roomId, cam: false, mic });
         setLocalStreamState(new MediaStream(localStream.current.getTracks()));
-      } catch (err) {
-        console.error("Failed to re-enable camera:", err);
+      } else {
+        // --- CAMERA ON ---
+        try {
+          const newStream = await navigator.mediaDevices.getUserMedia({ video: true });
+          const newVideoTrack = newStream.getVideoTracks()[0];
+          if (!newVideoTrack) return;
+
+          localStorage.setItem("wt_pref_camera", "true");
+          localStream.current.addTrack(newVideoTrack);
+
+          // Attach new track to all peer connections
+          await Promise.all(
+            Object.values(peerConnections.current).map(async (pc) => {
+              const sender = findVideoSender(pc);
+              if (sender && typeof sender.replaceTrack === "function") {
+                await sender.replaceTrack(newVideoTrack).catch((e) => console.warn("replaceTrack error:", e));
+              } else {
+                pc.addTrack(newVideoTrack, localStream.current!);
+              }
+            })
+          );
+
+          socket?.emit("participant_status", { roomId, cam: true, mic });
+          setLocalStreamState(new MediaStream(localStream.current.getTracks()));
+        } catch (err) {
+          console.error("Failed to re-enable camera:", err);
+          // On permission denial or hardware failure, record cam: false and do not crash
+          localStorage.setItem("wt_pref_camera", "false");
+          socket?.emit("participant_status", { roomId, cam: false, mic });
+          setLocalStreamState(new MediaStream(localStream.current.getTracks()));
+        }
       }
-    }
+    }).catch((err) => {
+      console.error("Error in toggleVideo queue:", err);
+    });
+
+    return toggleVideoPromiseRef.current;
   };
 
   const toggleAudio = async () => {
