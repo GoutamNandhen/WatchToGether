@@ -10,6 +10,121 @@ const prisma = new PrismaClient();
 const JWT_SECRET = process.env.JWT_SECRET || "test_jwt_secret_key_12345";
 process.env.JWT_SECRET = JWT_SECRET;
 
+interface StreamStateContext {
+  cameraStreamIds: Record<string, string>;
+  screenShareStreamIds: Record<string, string>;
+}
+
+function classifyRemoteStream(
+  peerSocketId: string,
+  streamId: string,
+  context: StreamStateContext
+): "camera" | "screen_share" {
+  if (context.screenShareStreamIds[peerSocketId] === streamId) {
+    return "screen_share";
+  }
+  const existingCameraStreamId = context.cameraStreamIds[peerSocketId];
+  if (existingCameraStreamId && existingCameraStreamId !== streamId) {
+    return "screen_share";
+  }
+  return "camera";
+}
+
+function handleOnTrackStream<T extends { id: string }>(
+  peerSocketId: string,
+  stream: T,
+  currentPeers: { socketId: string; stream: T }[],
+  currentScreenShares: Record<string, T>,
+  context: StreamStateContext
+): {
+  peers: { socketId: string; stream: T }[];
+  screenShares: Record<string, T>;
+  streamKind: "camera" | "screen_share";
+} {
+  const streamKind = classifyRemoteStream(peerSocketId, stream.id, context);
+
+  if (streamKind === "screen_share") {
+    context.screenShareStreamIds[peerSocketId] = stream.id;
+    return {
+      peers: currentPeers.filter((p) => !(p.socketId === peerSocketId && p.stream.id === stream.id)),
+      screenShares: {
+        ...currentScreenShares,
+        [peerSocketId]: stream,
+      },
+      streamKind,
+    };
+  } else {
+    context.cameraStreamIds[peerSocketId] = stream.id;
+    const exists = currentPeers.some((p) => p.socketId === peerSocketId);
+    const updatedPeers = exists
+      ? currentPeers.map((p) => (p.socketId === peerSocketId ? { ...p, stream } : p))
+      : [...currentPeers, { socketId: peerSocketId, stream }];
+
+    return {
+      peers: updatedPeers,
+      screenShares: currentScreenShares,
+      streamKind,
+    };
+  }
+}
+
+function handleScreenShareStartSignal<T extends { id: string }>(
+  socketId: string,
+  streamId: string,
+  currentPeers: { socketId: string; stream: T }[],
+  currentScreenShares: Record<string, T>,
+  context: StreamStateContext
+): {
+  peers: { socketId: string; stream: T }[];
+  screenShares: Record<string, T>;
+} {
+  context.screenShareStreamIds[socketId] = streamId;
+  const misplacedPeer = currentPeers.find((p) => p.socketId === socketId && p.stream.id === streamId);
+  const streamToPromote = misplacedPeer?.stream;
+
+  const cleanPeers = currentPeers.filter((p) => p.stream.id !== streamId);
+  const updatedScreenShares = streamToPromote
+    ? { ...currentScreenShares, [socketId]: streamToPromote }
+    : currentScreenShares;
+
+  return {
+    peers: cleanPeers,
+    screenShares: updatedScreenShares,
+  };
+}
+
+function handleScreenShareStopSignal<T>(
+  socketId: string,
+  currentScreenShares: Record<string, T>,
+  context: StreamStateContext
+): Record<string, T> {
+  delete context.screenShareStreamIds[socketId];
+  const next = { ...currentScreenShares };
+  delete next[socketId];
+  return next;
+}
+
+function handleUserLeftCleanup<T>(
+  socketId: string,
+  currentPeers: { socketId: string; stream: T }[],
+  currentScreenShares: Record<string, T>,
+  context: StreamStateContext
+): {
+  peers: { socketId: string; stream: T }[];
+  screenShares: Record<string, T>;
+} {
+  delete context.cameraStreamIds[socketId];
+  delete context.screenShareStreamIds[socketId];
+
+  const nextScreenShares = { ...currentScreenShares };
+  delete nextScreenShares[socketId];
+
+  return {
+    peers: currentPeers.filter((p) => p.socketId !== socketId),
+    screenShares: nextScreenShares,
+  };
+}
+
 // Mock MediaStreamTrack
 class MockMediaStreamTrack {
   public id: string;
@@ -123,21 +238,11 @@ class SimulatedRemoteAudioManager {
     movieFocused: false,
   };
 
-  public syncPeers(
-    peers: { socketId: string; stream: MockMediaStream }[],
-    screenShares: Record<string, string> = {}
-  ) {
-    // 1. Filter out screen shares and deduplicate by socketId (matches RemoteAudioManager.tsx)
-    const eligible = peers.filter((p) => {
-      if (!p.stream || !p.socketId) return false;
-      if (screenShares[p.socketId] && screenShares[p.socketId] === p.stream.id) {
-        return false;
-      }
-      return true;
-    });
-
+  public syncPeers(peers: { socketId: string; stream: MockMediaStream }[]) {
+    // Deduplicate by socketId (RemoteAudioManager consumes ONLY camera/mic streams in peers)
     const currentSocketIds = new Set<string>();
-    for (const p of eligible) {
+    for (const p of peers) {
+      if (!p.stream || !p.socketId) continue;
       if (currentSocketIds.has(p.socketId)) continue;
       currentSocketIds.add(p.socketId);
 
@@ -189,7 +294,11 @@ class SimulatedAudioClient {
   public localStream: MockMediaStream | null = null;
   public peers: { socketId: string; stream: MockMediaStream }[] = [];
   public peerStatuses: Record<string, { cam: boolean; mic: boolean }> = {};
-  public screenShares: Record<string, string> = {};
+  public screenShares: Record<string, MockMediaStream> = {};
+  public streamStateContext: StreamStateContext = {
+    cameraStreamIds: {},
+    screenShareStreamIds: {},
+  };
   public audioManager: SimulatedRemoteAudioManager = new SimulatedRemoteAudioManager();
   public currentRoomId = "";
 
@@ -229,20 +338,38 @@ class SimulatedAudioClient {
     });
 
     this.socket.on("screen_share_start", ({ socketId, streamId }: any) => {
-      this.screenShares[socketId] = streamId;
-      this.audioManager.syncPeers(this.peers, this.screenShares);
+      const result = handleScreenShareStartSignal(
+        socketId,
+        streamId,
+        this.peers,
+        this.screenShares,
+        this.streamStateContext
+      );
+      this.peers = result.peers;
+      this.screenShares = result.screenShares;
+      this.audioManager.syncPeers(this.peers);
     });
 
     this.socket.on("screen_share_stop", ({ socketId }: any) => {
-      delete this.screenShares[socketId];
-      this.audioManager.syncPeers(this.peers, this.screenShares);
+      this.screenShares = handleScreenShareStopSignal(
+        socketId,
+        this.screenShares,
+        this.streamStateContext
+      );
+      this.audioManager.syncPeers(this.peers);
     });
 
     this.socket.on("user_left", ({ socketId }: any) => {
-      this.peers = this.peers.filter((p) => p.socketId !== socketId);
+      const result = handleUserLeftCleanup(
+        socketId,
+        this.peers,
+        this.screenShares,
+        this.streamStateContext
+      );
+      this.peers = result.peers;
+      this.screenShares = result.screenShares;
       delete this.peerStatuses[socketId];
-      delete this.screenShares[socketId];
-      this.audioManager.syncPeers(this.peers, this.screenShares);
+      this.audioManager.syncPeers(this.peers);
     });
   }
 
@@ -297,13 +424,16 @@ class SimulatedAudioClient {
 
   // Simulate remote peer adding track and receiving ontrack
   public receiveRemoteStream(fromSocketId: string, remoteStream: MockMediaStream) {
-    const existing = this.peers.find((p) => p.socketId === fromSocketId || p.stream.id === remoteStream.id);
-    if (existing) {
-      existing.stream = remoteStream;
-    } else {
-      this.peers.push({ socketId: fromSocketId, stream: remoteStream });
-    }
-    this.audioManager.syncPeers(this.peers, this.screenShares);
+    const result = handleOnTrackStream(
+      fromSocketId,
+      remoteStream,
+      this.peers,
+      this.screenShares,
+      this.streamStateContext
+    );
+    this.peers = result.peers;
+    this.screenShares = result.screenShares;
+    this.audioManager.syncPeers(this.peers);
   }
 
   public leaveRoom(roomId: string): Promise<void> {
@@ -325,7 +455,7 @@ class SimulatedAudioClient {
     this.peers = [];
     this.peerStatuses = {};
     this.screenShares = {};
-    this.audioManager.syncPeers([], {});
+    this.audioManager.syncPeers([]);
   }
 }
 
@@ -375,7 +505,7 @@ async function runAudioTests() {
     create: { id: userB_id, email: "audio_pipeline_b@test.com", passwordHash: "hash", name: "User B" },
   });
 
-  for (const num of [1, 2, 5, 10]) {
+  for (const num of [1, 2, 5, 9, 10]) {
     const id = getRoomId(num);
     await prisma.room.upsert({
       where: { id },
@@ -554,26 +684,83 @@ async function runAudioTests() {
     assert(!clientB7.audioManager.autoplayBlockedPeers.has("peer-blocked"), "Participant cleared from blocked set after unlock");
 
     // -------------------------------------------------------------
-    // TEST 9: Screen-share / movie stream -> not treated as microphone audio sink
+    // TEST 9: Screen-share start/stop does not destroy remote mic audio
     // -------------------------------------------------------------
-    console.log("\n--- TEST 9: Screen-share stream excluded from mic audio ---");
+    console.log("\n--- TEST 9: Screen-share start/stop preserves remote mic audio ---");
+    const rId9 = getRoomId(9);
+
+    const clientA9 = new SimulatedAudioClient(userA_id, "User A", serverUrl, tokenA);
     const clientB9 = new SimulatedAudioClient(userB_id, "User B", serverUrl, tokenB);
-    const micStream = new MockMediaStream([new MockMediaStreamTrack("audio")], "stream-mic-123");
-    const screenStream = new MockMediaStream([new MockMediaStreamTrack("video")], "stream-screen-999");
 
-    // Register peer with both mic stream and screen stream
-    clientB9.peers = [
-      { socketId: "peer-host", stream: micStream },
-      { socketId: "peer-host-screen", stream: screenStream },
-    ];
-    // Record screen-share stream ID in screenShares
-    clientB9.screenShares = { "peer-host-screen": "stream-screen-999" };
+    await clientA9.connect();
+    await clientA9.joinRoom(rId9, true, true);
+    await clientB9.connect();
+    await clientB9.joinRoom(rId9, true, true);
 
-    clientB9.audioManager.syncPeers(clientB9.peers, clientB9.screenShares);
+    // 1. User A has camera ON + microphone ON
+    const camMicStreamA = new MockMediaStream([
+      new MockMediaStreamTrack("audio"),
+      new MockMediaStreamTrack("video"),
+    ], "stream-user-a-cam-mic");
 
-    assert(clientB9.audioManager.audioSinks.has("peer-host"), "Microphone stream received audio sink");
-    assert(!clientB9.audioManager.audioSinks.has("peer-host-screen"), "Screen-share stream strictly excluded from microphone audio sinks");
-    assert(clientB9.audioManager.audioSinks.size === 1, "Only microphone stream has an audio sink");
+    // 2. User B receives A's camera/microphone stream
+    clientB9.receiveRemoteStream(clientA9.socketId, camMicStreamA);
+
+    // 3. User B has a working dedicated audio sink for A
+    assert(clientB9.audioManager.audioSinks.has(clientA9.socketId), "Step 3: Dedicated audio sink exists for A");
+    const initialSink = clientB9.audioManager.audioSinks.get(clientA9.socketId)!;
+    assert(initialSink.srcObject === camMicStreamA, "Step 3: Audio sink uses A's camera/mic stream");
+    assert(initialSink.isPlaying === true, "Step 3: Audio sink is playing");
+
+    // 4. User A starts screen sharing (emits screen_share_start)
+    const screenStreamA = new MockMediaStream([
+      new MockMediaStreamTrack("video"),
+    ], "stream-user-a-screen-share");
+    clientA9.socket?.emit("screen_share_start", { roomId: rId9, streamId: screenStreamA.id });
+    await new Promise((r) => setTimeout(r, 100));
+
+    // 5. User B receives A's screen-share stream via ontrack
+    clientB9.receiveRemoteStream(clientA9.socketId, screenStreamA);
+
+    // 6. The screen-share stream must NOT replace A's camera/microphone stream in `peers`
+    assert(clientB9.peers.length === 1, "Step 6: Exactly 1 peer in peers list");
+    assert(clientB9.peers[0].stream === camMicStreamA, "Step 6: Screen-share did NOT replace camera/mic stream in peers");
+    assert(clientB9.screenShares[clientA9.socketId] === screenStreamA, "Step 6: Screen-share stream stored separately in screenShares");
+
+    // 7. RemoteAudioManager must continue using A's camera/microphone stream
+    const sinkDuringScreenShare = clientB9.audioManager.audioSinks.get(clientA9.socketId);
+    assert(sinkDuringScreenShare !== undefined, "Step 7: Audio sink still exists during screen share");
+    assert(sinkDuringScreenShare?.srcObject === camMicStreamA, "Step 7: Audio sink continues using camera/mic stream");
+
+    // 8. User B must still have exactly one remote audio sink for A
+    assert(clientB9.audioManager.audioSinks.size === 1, "Step 8: Exactly 1 remote audio sink for A");
+    assert(sinkDuringScreenShare?.isPlaying === true, "Step 8: Audio sink remains playing during screen share");
+
+    // 9. User A stops screen sharing
+    clientA9.socket?.emit("screen_share_stop", { roomId: rId9 });
+    await new Promise((r) => setTimeout(r, 100));
+
+    // 10. Camera/microphone stream remains intact in peers
+    assert(clientB9.peers.length === 1, "Step 10: Camera/mic stream intact in peers after screen share stopped");
+    assert(clientB9.peers[0].stream === camMicStreamA, "Step 10: Peers list maintains camera/mic stream");
+    assert(clientB9.screenShares[clientA9.socketId] === undefined, "Step 10: Screen share cleanly removed from screenShares");
+
+    // 11. Audio sink remains intact and playing
+    assert(clientB9.audioManager.audioSinks.size === 1, "Step 11: Audio sink remains intact after screen share stop");
+    assert(clientB9.audioManager.audioSinks.get(clientA9.socketId)?.srcObject === camMicStreamA, "Step 11: Audio sink still attached to camera/mic stream");
+    assert(clientB9.audioManager.audioSinks.get(clientA9.socketId)?.isPlaying === true, "Step 11: Audio sink still playing");
+
+    // 12. User A leaves
+    await clientA9.leaveRoom(rId9);
+    await new Promise((r) => setTimeout(r, 100));
+
+    // 13. Audio sink is cleaned up
+    assert(!clientB9.audioManager.audioSinks.has(clientA9.socketId), "Step 13: Audio sink cleaned up when user leaves");
+    assert(clientB9.peers.length === 0, "Step 13: Peers list empty after leave");
+    assert(Object.keys(clientB9.screenShares).length === 0, "Step 13: ScreenShares empty after leave");
+
+    clientA9.disconnect();
+    clientB9.disconnect();
 
     // -------------------------------------------------------------
     // TEST 10: Reconnection -> remote audio sink cleanly restored
@@ -598,7 +785,7 @@ async function runAudioTests() {
     await new Promise((r) => setTimeout(r, 100));
 
     // Client B cleans up old socket sink
-    clientB10.audioManager.syncPeers(clientB10.peers, clientB10.screenShares);
+    clientB10.audioManager.syncPeers(clientB10.peers);
     assert(!clientB10.audioManager.audioSinks.has(clientA10.socketId), "Old audio sink cleaned up after disconnect");
 
     // User A reconnects

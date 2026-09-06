@@ -4,7 +4,6 @@ import { VolumeX, Volume2 } from "lucide-react";
 export interface RemoteAudioSinkProps {
   peerSocketId: string;
   stream: MediaStream;
-  isMicOn?: boolean;
   onAutoplayBlocked: (socketId: string) => void;
   onPlaybackSuccess: (socketId: string) => void;
   registerAudioElement: (socketId: string, el: HTMLAudioElement) => void;
@@ -93,14 +92,10 @@ export function RemoteAudioSink({
 
 export interface RemoteAudioManagerProps {
   peers: { socketId: string; stream: MediaStream }[];
-  peerStatuses?: Record<string, { cam: boolean; mic: boolean }>;
-  screenShares?: Record<string, string>;
 }
 
 export default function RemoteAudioManager({
   peers,
-  peerStatuses = {},
-  screenShares = {},
 }: RemoteAudioManagerProps) {
   const [autoplayBlockedPeers, setAutoplayBlockedPeers] = useState<Set<string>>(new Set());
   const audioElementsMap = useRef<Map<string, HTMLAudioElement>>(new Map());
@@ -173,27 +168,18 @@ export default function RemoteAudioManager({
     };
   }, [autoplayBlockedPeers.size, unlockAllAudio]);
 
-  // Filter out screen-share streams and ensure exactly 1 audio sink per remote participant
+  // Ensure exactly 1 audio sink per remote participant (consuming only camera/mic streams)
   const uniquePeers = React.useMemo(() => {
-    const eligiblePeers = peers.filter((p) => {
-      if (!p.stream || !p.socketId) return false;
-      // Exclude screen share streams from being treated as microphone audio
-      if (screenShares[p.socketId] && screenShares[p.socketId] === p.stream.id) {
-        return false;
-      }
-      return true;
-    });
-
     const seenSocketIds = new Set<string>();
     const result: { socketId: string; stream: MediaStream }[] = [];
-    for (const p of eligiblePeers) {
-      if (!seenSocketIds.has(p.socketId)) {
+    for (const p of peers) {
+      if (p.stream && p.socketId && !seenSocketIds.has(p.socketId)) {
         seenSocketIds.add(p.socketId);
         result.push(p);
       }
     }
     return result;
-  }, [peers, screenShares]);
+  }, [peers]);
 
   // Expose pipeline state for verification and testing
   useEffect(() => {
@@ -224,7 +210,6 @@ export default function RemoteAudioManager({
           key={peer.socketId}
           peerSocketId={peer.socketId}
           stream={peer.stream}
-          isMicOn={peerStatuses[peer.socketId]?.mic ?? true}
           onAutoplayBlocked={handleAutoplayBlocked}
           onPlaybackSuccess={handlePlaybackSuccess}
           registerAudioElement={registerAudioElement}

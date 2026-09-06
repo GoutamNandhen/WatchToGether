@@ -326,11 +326,7 @@ export default function Room() {
   return (
     <div className="flex h-screen bg-black overflow-hidden" ref={mainContainerRef}>
       {/* Dedicated Remote WebRTC Audio Pipeline (decoupled from camera tiles/sidebar) */}
-      <RemoteAudioManager
-        peers={peers}
-        peerStatuses={peerStatuses}
-        screenShares={screenShares}
-      />
+      <RemoteAudioManager peers={peers} />
 
       {/* Main Video Area */}
       <div className="flex-1 flex flex-col h-full relative z-0 bg-black">
@@ -380,9 +376,12 @@ export default function Room() {
               >
                 <option value="url">Video Player (YouTube)</option>
                 {screenStreamState && <option value={screenStreamState.id}>Your Screen</option>}
-                {Object.entries(screenShares).map(([socketId, streamId]) => (
-                  <option key={streamId} value={streamId}>Participant {socketId.slice(0,4)}'s Screen</option>
-                ))}
+                {Object.entries(screenShares).map(([socketId, screenShareStream]) => {
+                  const sId = typeof screenShareStream === "string" ? screenShareStream : (screenShareStream as MediaStream).id;
+                  return (
+                    <option key={sId} value={sId}>Participant {socketId.slice(0,4)}'s Screen</option>
+                  );
+                })}
               </select>
             </div>
 
@@ -404,8 +403,9 @@ export default function Room() {
             (() => {
               const streamToRender = [
                 ...(screenStreamState ? [screenStreamState] : []),
+                ...Object.values(screenShares).map((s) => (typeof s === "string" ? null : s)).filter((s): s is MediaStream => !!s),
                 ...peers.map(p => p.stream)
-              ].find(s => s.id === mainScreenSource);
+              ].find(s => s && s.id === mainScreenSource);
 
               if (!streamToRender) {
                 // Fallback to URL if stream was closed

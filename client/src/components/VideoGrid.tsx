@@ -125,7 +125,7 @@ interface VideoGridProps {
   onMouseLeaveBottom?: () => void;
   isHost?: boolean;
   roomId?: string;
-  screenShares?: Record<string, string>;
+  screenShares?: Record<string, MediaStream | string>;
 }
 
 export default function VideoGrid({ localStream, screenStream, peers, peerStatuses = {}, screenShares = {}, toggleAudio, toggleVideo, shareScreen, toggleFullscreen, isFullscreen = false, floating = false, isBottomHovered = false, onMouseLeaveBottom, isHost = false, roomId }: VideoGridProps) {

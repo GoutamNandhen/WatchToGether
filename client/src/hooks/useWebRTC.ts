@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useSocketStore } from "../store/useSocketStore";
 import { useAuthStore } from "../store/useAuthStore";
+import { classifyRemoteStream, type StreamStateContext } from "../utils/streamClassification";
 
 interface PeerConnection {
   [socketId: string]: RTCPeerConnection;
@@ -29,7 +30,7 @@ export function useWebRTC(roomId: string) {
   
   const [peers, setPeers] = useState<{ socketId: string, stream: MediaStream }[]>([]);
   const [peerStatuses, setPeerStatuses] = useState<Record<string, { cam: boolean, mic: boolean }>>({});
-  const [screenShares, setScreenShares] = useState<Record<string, string>>({}); // socketId -> streamId
+  const [screenShares, setScreenShares] = useState<Record<string, MediaStream>>({}); // socketId -> screenShareStream
   const [localStreamState, setLocalStreamState] = useState<MediaStream | null>(null);
   const [screenStreamState, setScreenStreamState] = useState<MediaStream | null>(null);
   const localStream = useRef<MediaStream | null>(null);
@@ -38,6 +39,10 @@ export function useWebRTC(roomId: string) {
   const mediaPromise = useRef<Promise<MediaStream | null> | null>(null);
   const pendingCandidates = useRef<Record<string, RTCIceCandidateInit[]>>({});
   const toggleVideoPromiseRef = useRef<Promise<void>>(Promise.resolve());
+  const streamStateContext = useRef<StreamStateContext>({
+    cameraStreamIds: {},
+    screenShareStreamIds: {},
+  });
 
   const getLocalStream = async () => {
     let resolveMedia: (stream: MediaStream | null) => void;
@@ -137,16 +142,26 @@ export function useWebRTC(roomId: string) {
           };
         }
 
-        setPeers((prev) => {
-          const stream = event.streams[0];
-          if (!stream) return prev;
-          const streamId = stream.id;
-          const exists = prev.some((p) => p.socketId === peerSocketId || p.stream.id === streamId);
-          if (exists) {
-            return prev.map((p) => (p.socketId === peerSocketId ? { ...p, stream } : p));
-          }
-          return [...prev, { socketId: peerSocketId, stream }];
-        });
+        const stream = event.streams[0];
+        if (!stream) return;
+
+        const kind = classifyRemoteStream(peerSocketId, stream.id, streamStateContext.current);
+        if (kind === "screen_share") {
+          streamStateContext.current.screenShareStreamIds[peerSocketId] = stream.id;
+          setScreenShares((prev) => ({ ...prev, [peerSocketId]: stream }));
+          // Ensure screen-share stream never replaces or sits inside peers
+          setPeers((prev) => prev.filter((p) => !(p.socketId === peerSocketId && p.stream.id === stream.id)));
+        } else {
+          // Camera / microphone primary stream
+          streamStateContext.current.cameraStreamIds[peerSocketId] = stream.id;
+          setPeers((prev) => {
+            const exists = prev.some((p) => p.socketId === peerSocketId);
+            if (exists) {
+              return prev.map((p) => (p.socketId === peerSocketId ? { ...p, stream } : p));
+            }
+            return [...prev, { socketId: peerSocketId, stream }];
+          });
+        }
       };
 
       const hasVideoTrack = stream.getVideoTracks().some((t) => t.readyState === "live");
@@ -203,6 +218,9 @@ export function useWebRTC(roomId: string) {
       const cam = (localStream.current?.getVideoTracks() || []).some((t) => t.enabled && t.readyState === "live");
       const mic = (localStream.current?.getAudioTracks() || []).some((t) => t.enabled && t.readyState === "live");
       socket.emit("participant_status", { roomId, cam, mic });
+      if (screenStreamRef.current) {
+        socket.emit("screen_share_start", { roomId, streamId: screenStreamRef.current.id });
+      }
     });
 
     socket.on("participant_status", ({ socketId, cam, mic }) => {
@@ -294,6 +312,8 @@ export function useWebRTC(roomId: string) {
         delete peerConnections.current[socketId];
       }
       delete pendingCandidates.current[socketId];
+      delete streamStateContext.current.cameraStreamIds[socketId];
+      delete streamStateContext.current.screenShareStreamIds[socketId];
       setPeers((prev) => prev.filter((p) => p.socketId !== socketId));
       setPeerStatuses((prev) => {
         const next = { ...prev };
@@ -309,12 +329,28 @@ export function useWebRTC(roomId: string) {
 
     socket.on("screen_share_start", ({ socketId, streamId }) => {
       if (!isMounted) return;
-      setScreenShares(prev => ({ ...prev, [socketId]: streamId }));
+      streamStateContext.current.screenShareStreamIds[socketId] = streamId;
+
+      // If this stream was already received on ontrack before this signal, promote it to screenShares and clean from peers
+      let streamToPromote: MediaStream | undefined = undefined;
+      setPeers((prevPeers) => {
+        const misplaced = prevPeers.find((p) => p.socketId === socketId && p.stream.id === streamId);
+        if (misplaced) {
+          streamToPromote = misplaced.stream;
+          return prevPeers.filter((p) => !(p.socketId === socketId && p.stream.id === streamId));
+        }
+        return prevPeers;
+      });
+
+      if (streamToPromote) {
+        setScreenShares((prev) => ({ ...prev, [socketId]: streamToPromote! }));
+      }
     });
 
     socket.on("screen_share_stop", ({ socketId }) => {
       if (!isMounted) return;
-      setScreenShares(prev => {
+      delete streamStateContext.current.screenShareStreamIds[socketId];
+      setScreenShares((prev) => {
         const next = { ...prev };
         delete next[socketId];
         return next;
@@ -332,6 +368,7 @@ export function useWebRTC(roomId: string) {
       });
       peerConnections.current = {};
       pendingCandidates.current = {};
+      streamStateContext.current = { cameraStreamIds: {}, screenShareStreamIds: {} };
       setPeers([]);
       setPeerStatuses({});
       setScreenShares({});
@@ -494,11 +531,12 @@ export function useWebRTC(roomId: string) {
     screenStreamRef.current = stream;
     setScreenStreamState(stream);
 
+    // Emit screen_share_start before adding track so peers register streamId ahead of SDP negotiation
+    socket?.emit("screen_share_start", { roomId, streamId: stream.id });
+
     Object.values(peerConnections.current).forEach((pc) => {
       pc.addTrack(videoTrack, stream);
     });
-
-    socket?.emit("screen_share_start", { roomId, streamId: stream.id });
 
     videoTrack.onended = () => {
       Object.values(peerConnections.current).forEach((pc) => {
