@@ -22,7 +22,7 @@ export default function Room() {
   const { socket, connect, joinRoom, leaveRoom, sendMessage, messages, clearMessages, connectionStatus, reconnectError } = useSocketStore();
   const [chatInput, setChatInput] = useState("");
   const chatRef = useRef<HTMLDivElement>(null);
-  const { getLocalStream, localStream, localStreamState, screenStreamState, peers, peerStatuses, screenShares, toggleAudio, toggleVideo, shareScreen, broadcastMediaStream, switchAudioDevice, selectedAudioDeviceId } = useWebRTC(id || "");
+  const { getLocalStream, localStream, localStreamState, screenStreamState, peers, peerStatuses, screenShares, toggleAudio, toggleVideo, shareScreen, broadcastMediaStream } = useWebRTC(id || "");
   const [isInviteModalOpen, setIsInviteModalOpen] = useState(false);
   const [mainScreenSource, setMainScreenSource] = useState<'url' | string>('url');
   const [roomCreatedAt, setRoomCreatedAt] = useState<string | null>(null);
@@ -613,7 +613,7 @@ export default function Room() {
           </div>
         </div>
       )}
-      <AudioSettingsModal isOpen={isSettingsOpen} onClose={() => setIsSettingsOpen(false)} switchAudioDevice={switchAudioDevice} selectedAudioDeviceId={selectedAudioDeviceId} />
+      <AudioSettingsModal isOpen={isSettingsOpen} onClose={() => setIsSettingsOpen(false)} />
       {id && <InviteModal isOpen={isInviteModalOpen} onClose={() => setIsInviteModalOpen(false)} roomId={id} />}
     </div>
   );
