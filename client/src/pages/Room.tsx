@@ -244,6 +244,34 @@ export default function Room() {
     return () => clearInterval(interval);
   }, [roomCreatedAt]);
 
+  // Automatically promote incoming screen-share / captured local video to main movie stage,
+  // and cleanly revert to 'url' when the broadcast ends.
+  const prevRemoteStreamIdsRef = useRef<string[]>([]);
+  useEffect(() => {
+    const activeRemoteStreams = Object.values(screenShares)
+      .map((s) => (typeof s === "string" ? null : s))
+      .filter((s): s is MediaStream => !!s && s instanceof MediaStream);
+
+    const activeRemoteStreamIds = activeRemoteStreams.map((s) => s.id);
+    const prevStreamIds = prevRemoteStreamIdsRef.current;
+
+    // Detect if a new remote broadcast stream arrived
+    const newlyArrivedStream = activeRemoteStreams.find((s) => !prevStreamIds.includes(s.id));
+
+    if (newlyArrivedStream) {
+      setMainScreenSource(newlyArrivedStream.id);
+    } else if (mainScreenSource !== 'url') {
+      const isLocalActive = screenStreamState && screenStreamState.id === mainScreenSource;
+      const isRemoteActive = activeRemoteStreamIds.includes(mainScreenSource);
+
+      if (!isLocalActive && !isRemoteActive) {
+        setMainScreenSource('url');
+      }
+    }
+
+    prevRemoteStreamIdsRef.current = activeRemoteStreamIds;
+  }, [screenShares, screenStreamState, mainScreenSource]);
+
   useVoiceActivityDetection(id, localStreamState);
 
   const addActiveSpeaker = useAudioStore(state => state.addActiveSpeaker);
@@ -404,13 +432,10 @@ export default function Room() {
               const streamToRender = [
                 ...(screenStreamState ? [screenStreamState] : []),
                 ...Object.values(screenShares).map((s) => (typeof s === "string" ? null : s)).filter((s): s is MediaStream => !!s),
-                ...peers.map(p => p.stream)
               ].find(s => s && s.id === mainScreenSource);
 
               if (!streamToRender) {
-                // Fallback to URL if stream was closed
-                setMainScreenSource('url');
-                return id ? <VideoPlayer ref={videoPlayerRef} roomId={id} isFullscreen={isFullscreen} isHost={isHost} broadcastMediaStream={broadcastMediaStream} /> : null;
+                return id ? <VideoPlayer ref={videoPlayerRef} roomId={id} isFullscreen={isFullscreen} isHost={isHost} broadcastMediaStream={broadcastMediaStream} shareScreen={shareScreen} /> : null;
               }
 
               return (
@@ -419,6 +444,7 @@ export default function Room() {
                     ref={el => { 
                       if (el && streamToRender && el.srcObject !== streamToRender) {
                         el.srcObject = streamToRender; 
+                        el.play().catch(err => console.warn("[Room] Captured stream playback notice:", err));
                       }
                     }}
                     autoPlay 

@@ -381,9 +381,10 @@ export function useWebRTC(roomId: string) {
         return prevPeers;
       });
 
-      if (streamToPromote) {
-        setScreenShares((prev) => ({ ...prev, [socketId]: streamToPromote! }));
-      }
+      setScreenShares((prev) => ({
+        ...prev,
+        [socketId]: streamToPromote || prev[socketId] || streamId,
+      }));
     });
 
     socket.on("screen_share_stop", ({ socketId }) => {
@@ -617,21 +618,28 @@ export function useWebRTC(roomId: string) {
     // Emit screen_share_start before adding track so peers register streamId ahead of SDP negotiation
     socket?.emit("screen_share_start", { roomId, streamId: stream.id });
 
-    Object.values(peerConnections.current).forEach((pc) => {
-      pc.addTrack(videoTrack, stream);
+    // Add all tracks (video and captured audio) to peer connections
+    stream.getTracks().forEach((track) => {
+      Object.values(peerConnections.current).forEach((pc) => {
+        pc.addTrack(track, stream);
+      });
     });
 
-    videoTrack.onended = () => {
-      Object.values(peerConnections.current).forEach((pc) => {
-        const sender = pc.getSenders().find((s) => s.track === videoTrack);
-        if (sender) {
-          pc.removeTrack(sender);
-        }
+    const cleanupBroadcast = () => {
+      stream.getTracks().forEach((track) => {
+        Object.values(peerConnections.current).forEach((pc) => {
+          const sender = pc.getSenders().find((s) => s.track === track);
+          if (sender) {
+            pc.removeTrack(sender);
+          }
+        });
       });
       screenStreamRef.current = null;
       setScreenStreamState(null);
       socket?.emit("screen_share_stop", { roomId });
     };
+
+    videoTrack.onended = cleanupBroadcast;
   };
 
   const shareScreen = async () => {

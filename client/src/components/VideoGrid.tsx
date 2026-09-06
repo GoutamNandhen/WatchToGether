@@ -226,7 +226,9 @@ export default function VideoGrid({ localStream, screenStream, peers, peerStatus
     </div>
   );
 
-  const screenShareStreamIds = Object.values(screenShares);
+  const screenShareStreamIds = Object.values(screenShares)
+    .map((s) => (typeof s === "string" ? s : s?.id))
+    .filter((id): id is string => typeof id === "string" && id.length > 0);
 
   const allStreams = [
     ...(localStream
