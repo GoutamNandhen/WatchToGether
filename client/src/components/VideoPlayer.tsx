@@ -27,6 +27,128 @@ const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(({ roomId, isFu
   
   const playerRef = useRef<ReactPlayer>(null);
   const isHandlingRemote = useRef(false);
+  const isHostRef = useRef(isHost);
+  isHostRef.current = isHost;
+  const isFullscreenRef = useRef(isFullscreen);
+  isFullscreenRef.current = isFullscreen;
+  const urlRef = useRef(url);
+  urlRef.current = url;
+  const pendingUrlRef = useRef<string | null>(null);
+  const remoteHandlingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const checkIsFullscreen = () => {
+    return isFullscreenRef.current || !!(
+      typeof document !== 'undefined' && (
+        document.fullscreenElement ||
+        (document as Document & { webkitFullscreenElement?: Element }).webkitFullscreenElement
+      )
+    );
+  };
+
+  // When native fullscreen exits, apply any deferred URL change and resync with host
+  useEffect(() => {
+    if (!isFullscreen && pendingUrlRef.current !== null) {
+      const nextUrl = pendingUrlRef.current;
+      pendingUrlRef.current = null;
+      if (nextUrl !== urlRef.current) {
+        setUrl(nextUrl);
+        setPlaying(true);
+        if (!isHostRef.current && socket) {
+          socket.emit("request_sync", { roomId });
+        }
+      }
+    }
+  }, [isFullscreen, socket, roomId]);
+
+  useEffect(() => {
+    const handleNativeFsExit = () => {
+      const isFs = !!(
+        document.fullscreenElement ||
+        (document as Document & { webkitFullscreenElement?: Element }).webkitFullscreenElement
+      );
+      if (!isFs && pendingUrlRef.current !== null) {
+        const nextUrl = pendingUrlRef.current;
+        pendingUrlRef.current = null;
+        if (nextUrl !== urlRef.current) {
+          setUrl(nextUrl);
+          setPlaying(true);
+          if (!isHostRef.current && socket) {
+            socket.emit("request_sync", { roomId });
+          }
+        }
+      }
+    };
+    document.addEventListener("fullscreenchange", handleNativeFsExit);
+    document.addEventListener("webkitfullscreenchange", handleNativeFsExit);
+    return () => {
+      document.removeEventListener("fullscreenchange", handleNativeFsExit);
+      document.removeEventListener("webkitfullscreenchange", handleNativeFsExit);
+    };
+  }, [socket, roomId]);
+
+  const markHandlingRemote = (duration = 800) => {
+    if (remoteHandlingTimerRef.current) {
+      clearTimeout(remoteHandlingTimerRef.current);
+    }
+    isHandlingRemote.current = true;
+    remoteHandlingTimerRef.current = setTimeout(() => {
+      isHandlingRemote.current = false;
+      remoteHandlingTimerRef.current = null;
+    }, duration);
+  };
+
+  const lastSyncStateRef = useRef<{
+    time: number;
+    playing: boolean;
+    lastUpdatedAt: number;
+    localReceiptTime: number;
+    serverTime?: number;
+  } | null>(null);
+
+  const calculateExpectedTime = (syncState: {
+    time: number;
+    playing: boolean;
+    lastUpdatedAt: number;
+    localReceiptTime: number;
+    serverTime?: number;
+  }) => {
+    if (!syncState.playing) {
+      return syncState.time;
+    }
+    const elapsedSinceReceipt = (Date.now() - syncState.localReceiptTime) / 1000;
+    const serverDelay = syncState.serverTime && syncState.lastUpdatedAt
+      ? Math.max(0, (syncState.serverTime - syncState.lastUpdatedAt) / 1000)
+      : 0;
+    return syncState.time + serverDelay + elapsedSinceReceipt;
+  };
+
+  const applyDriftCorrection = (expectedTime: number, isPlaying: boolean) => {
+    if (!playerRef.current) return;
+    const myTime = typeof playerRef.current.getCurrentTime === 'function' ? playerRef.current.getCurrentTime() : 0;
+    const drift = expectedTime - myTime;
+
+    if (!isPlaying) {
+      if (Math.abs(drift) > 0.5) {
+        playerRef.current.seekTo(expectedTime, "seconds");
+      }
+      setPlaybackRate(1.0);
+    } else {
+      if (Math.abs(drift) > 3.0) {
+        // Hard seek for large drift
+        playerRef.current.seekTo(expectedTime, "seconds");
+        setPlaybackRate(1.0);
+      } else if (drift > 1.0) {
+        // Behind: gentle speedup
+        setPlaybackRate(1.05);
+      } else if (drift < -1.0) {
+        // Ahead: gentle slowdown
+        setPlaybackRate(0.95);
+      } else {
+        // In-sync deadband
+        setPlaybackRate(1.0);
+      }
+    }
+  };
 
   useImperativeHandle(ref, () => ({
     seekTo: (time: number) => {
@@ -107,99 +229,150 @@ const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(({ roomId, isFu
   useEffect(() => {
     if (!socket) return;
 
-    socket.on("play_video", ({ time }) => {
-      isHandlingRemote.current = true;
+    const handlePlayVideo = ({ time, serverTime }: { time: number; serverTime?: number }) => {
+      if (isHostRef.current) return;
+      if (pendingUrlRef.current && pendingUrlRef.current !== urlRef.current) return;
+      markHandlingRemote(800);
+      lastSyncStateRef.current = {
+        time,
+        playing: true,
+        lastUpdatedAt: serverTime || Date.now(),
+        localReceiptTime: Date.now(),
+        serverTime,
+      };
+      setPlaying(true);
       if (playerRef.current) {
         const currentTime = typeof playerRef.current.getCurrentTime === 'function' ? playerRef.current.getCurrentTime() : 0;
-        if (Math.abs(currentTime - time) > 2) {
+        if (Math.abs(currentTime - time) > 1.0) {
           if (typeof playerRef.current.seekTo === 'function') playerRef.current.seekTo(time, "seconds");
         }
       }
-      setPlaying(true);
-      setTimeout(() => { isHandlingRemote.current = false; }, 500);
-    });
+      setPlaybackRate(1.0);
+    };
 
-    socket.on("pause_video", ({ time }) => {
-      isHandlingRemote.current = true;
-      if (playerRef.current) {
-        if (typeof playerRef.current.seekTo === 'function') playerRef.current.seekTo(time, "seconds");
-      }
+    const handlePauseVideo = ({ time, serverTime }: { time: number; serverTime?: number }) => {
+      if (isHostRef.current) return;
+      if (pendingUrlRef.current && pendingUrlRef.current !== urlRef.current) return;
+      markHandlingRemote(800);
+      lastSyncStateRef.current = {
+        time,
+        playing: false,
+        lastUpdatedAt: serverTime || Date.now(),
+        localReceiptTime: Date.now(),
+        serverTime,
+      };
       setPlaying(false);
-      setTimeout(() => { isHandlingRemote.current = false; }, 500);
-    });
-
-    socket.on("video_state", ({ playing, time, url: newUrl }) => {
-        isHandlingRemote.current = true;
-        setPlaying(playing);
-        if (newUrl !== url) setUrl(newUrl);
-        if (playerRef.current) {
-          if (typeof playerRef.current.seekTo === 'function') playerRef.current.seekTo(time, "seconds");
-        }
-        setTimeout(() => { isHandlingRemote.current = false; }, 500);
-      });
-
-    socket.on("seek_video", ({ time }) => {
-      isHandlingRemote.current = true;
       if (playerRef.current) {
         if (typeof playerRef.current.seekTo === 'function') playerRef.current.seekTo(time, "seconds");
       }
-      setTimeout(() => { isHandlingRemote.current = false; }, 500);
-    });
+      setPlaybackRate(1.0);
+    };
 
-    socket.on("change_video", ({ url: newUrl }) => {
+    const handleSeekVideo = ({ time, serverTime }: { time: number; serverTime?: number }) => {
+      if (isHostRef.current) return;
+      if (pendingUrlRef.current && pendingUrlRef.current !== urlRef.current) return;
+      markHandlingRemote(800);
+      if (lastSyncStateRef.current) {
+        lastSyncStateRef.current.time = time;
+        lastSyncStateRef.current.lastUpdatedAt = serverTime || Date.now();
+        lastSyncStateRef.current.localReceiptTime = Date.now();
+      }
+      if (playerRef.current) {
+        if (typeof playerRef.current.seekTo === 'function') playerRef.current.seekTo(time, "seconds");
+      }
+      setPlaybackRate(1.0);
+    };
+
+    const handleChangeVideo = ({ url: newUrl }: { url: string }) => {
+      if (checkIsFullscreen() && newUrl !== urlRef.current) {
+        pendingUrlRef.current = newUrl;
+        return;
+      }
+      pendingUrlRef.current = null;
       setUrl(newUrl);
       setPlaying(true);
       if (playerRef.current) {
         if (typeof playerRef.current.seekTo === 'function') playerRef.current.seekTo(0);
       }
-    });
+      setPlaybackRate(1.0);
+    };
 
-
-
-    socket.on("sync_response", (playbackState: { time: number, playing: boolean, url: string, lastUpdatedAt?: number } | null) => {
+    const handleSyncResponse = (playbackState: { time: number; playing: boolean; url: string; lastUpdatedAt?: number; serverTime?: number } | null) => {
       if (!playbackState) return;
-      const { time, playing: hostPlaying, url: hostUrl, lastUpdatedAt } = playbackState;
-      isHandlingRemote.current = true;
-      if (hostUrl && hostUrl !== url) setUrl(hostUrl);
-      setPlaying(hostPlaying);
-      if (playerRef.current) {
-        let expectedTime = time;
-        if (hostPlaying && lastUpdatedAt) {
-          expectedTime = time + (Date.now() - lastUpdatedAt) / 1000;
-        }
+      if (isHostRef.current) return;
 
-        const myTime = typeof playerRef.current.getCurrentTime === 'function' ? playerRef.current.getCurrentTime() : 0;
-        const drift = expectedTime - myTime;
-        
-        if (Math.abs(drift) > 3) {
-          if (typeof playerRef.current.seekTo === 'function') playerRef.current.seekTo(expectedTime, "seconds");
-          setPlaybackRate(1.0);
-        } else if (drift > 0.5) {
-          setPlaybackRate(1.05); // Server is ahead, speed up
-        } else if (drift < -0.5) {
-          setPlaybackRate(0.95); // Server is behind, slow down
+      const { time, playing: hostPlaying, url: hostUrl, lastUpdatedAt, serverTime } = playbackState;
+      markHandlingRemote(800);
+
+      if (hostUrl && hostUrl !== urlRef.current) {
+        if (checkIsFullscreen()) {
+          pendingUrlRef.current = hostUrl;
         } else {
-          setPlaybackRate(1.0); // Synced!
+          pendingUrlRef.current = null;
+          setUrl(hostUrl);
         }
+      } else if (hostUrl === urlRef.current) {
+        pendingUrlRef.current = null;
       }
-      setTimeout(() => { isHandlingRemote.current = false; }, 500);
-    });
+
+      if (!pendingUrlRef.current || pendingUrlRef.current === urlRef.current) {
+        setPlaying(hostPlaying);
+
+        const now = Date.now();
+        lastSyncStateRef.current = {
+          time,
+          playing: hostPlaying,
+          lastUpdatedAt: lastUpdatedAt || now,
+          localReceiptTime: now,
+          serverTime: serverTime || now,
+        };
+
+        const expectedTime = calculateExpectedTime(lastSyncStateRef.current);
+        applyDriftCorrection(expectedTime, hostPlaying);
+      }
+    };
+
+    socket.on("play_video", handlePlayVideo);
+    socket.on("pause_video", handlePauseVideo);
+    socket.on("seek_video", handleSeekVideo);
+    socket.on("change_video", handleChangeVideo);
+    socket.on("sync_response", handleSyncResponse);
 
     return () => {
-      socket.off("play_video");
-      socket.off("pause_video");
-      socket.off("seek_video");
-      socket.off("change_video");
-      socket.off("request_sync");
-      socket.off("sync_response");
+      socket.off("play_video", handlePlayVideo);
+      socket.off("pause_video", handlePauseVideo);
+      socket.off("seek_video", handleSeekVideo);
+      socket.off("change_video", handleChangeVideo);
+      socket.off("sync_response", handleSyncResponse);
+      if (remoteHandlingTimerRef.current) {
+        clearTimeout(remoteHandlingTimerRef.current);
+      }
     };
-  }, [socket, isHost, playing, url]);
+  }, [socket, roomId]);
 
+  // Host periodic heartbeat while playing
+  useEffect(() => {
+    if (!isHost || !playing || !socket) return;
+
+    const intervalId = setInterval(() => {
+      if (playerRef.current && typeof playerRef.current.getCurrentTime === 'function') {
+        const currentTime = playerRef.current.getCurrentTime();
+        socket.emit("sync_time", { roomId, time: currentTime, playing: true });
+      }
+    }, 3000);
+
+    return () => clearInterval(intervalId);
+  }, [isHost, playing, socket, roomId]);
+
+  // Non-host fallback polling if no heartbeat received for > 8s
   useEffect(() => {
     if (isHost || !socket) return;
     const intervalId = setInterval(() => {
-      socket.emit("request_sync", { roomId });
-    }, 10000); // Ping every 10 seconds for seamless sync
+      const lastReceived = lastSyncStateRef.current?.localReceiptTime || 0;
+      if (Date.now() - lastReceived > 8000) {
+        socket.emit("request_sync", { roomId });
+      }
+    }, 5000);
     return () => clearInterval(intervalId);
   }, [isHost, socket, roomId]);
 
@@ -227,8 +400,32 @@ const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(({ roomId, isFu
     socket?.emit("pause_video", { roomId, time });
   };
 
-  const handleProgress = () => {
-    // Implement drift correction here if needed
+  const handleSeek = (seconds: number) => {
+    if (isHandlingRemote.current) return;
+    if (!isHostRef.current) return;
+    socket?.emit("seek_video", { roomId, time: seconds });
+  };
+
+  const handleProgress = (state: { playedSeconds: number }) => {
+    if (isHostRef.current) return;
+    if (!lastSyncStateRef.current || !lastSyncStateRef.current.playing) return;
+    if (isHandlingRemote.current) return;
+
+    const expectedTime = calculateExpectedTime(lastSyncStateRef.current);
+    const currentPos = state.playedSeconds;
+    const drift = expectedTime - currentPos;
+
+    if (Math.abs(drift) <= 0.5) {
+      setPlaybackRate((prev) => (prev !== 1.0 ? 1.0 : prev));
+    } else if (Math.abs(drift) > 3.0) {
+      markHandlingRemote(800);
+      playerRef.current?.seekTo(expectedTime, "seconds");
+      setPlaybackRate((prev) => (prev !== 1.0 ? 1.0 : prev));
+    } else if (drift > 1.0) {
+      setPlaybackRate((prev) => (prev !== 1.05 ? 1.05 : prev));
+    } else if (drift < -1.0) {
+      setPlaybackRate((prev) => (prev !== 0.95 ? 0.95 : prev));
+    }
   };
 
   const [videoError, setVideoError] = useState(false);
@@ -240,6 +437,7 @@ const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(({ roomId, isFu
       if (!/^https?:\/\//i.test(finalUrl)) {
         finalUrl = 'https://' + finalUrl;
       }
+      pendingUrlRef.current = null;
       setUrl(finalUrl);
       setPlaying(true);
       setVideoError(false);
@@ -250,6 +448,7 @@ const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(({ roomId, isFu
   };
 
   const handleStopMedia = () => {
+    pendingUrlRef.current = null;
     setUrl("");
     setPlaying(false);
     socket?.emit("change_video", { roomId, url: "" });
@@ -264,6 +463,7 @@ const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(({ roomId, isFu
     if (!file) return;
     
     const fileUrl = URL.createObjectURL(file);
+    pendingUrlRef.current = null;
     setUrl(fileUrl);
     setPlaying(true);
     setVideoError(false);
@@ -366,6 +566,7 @@ const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(({ roomId, isFu
             playbackRate={playbackRate}
             onPlay={handlePlay}
             onPause={handlePause}
+            onSeek={handleSeek}
             onProgress={handleProgress}
             onError={() => setVideoError(true)}
             controls={true}
