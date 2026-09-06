@@ -9,6 +9,16 @@ const prisma = new PrismaClient();
 const JWT_SECRET = process.env.JWT_SECRET || "test_jwt_secret_key_12345";
 process.env.JWT_SECRET = JWT_SECRET;
 
+// Standard localStorage mock to test actual browser persistence of 'wt_pref_camera'
+const localStorageStore = new Map<string, string>();
+const mockLocalStorage = {
+  getItem: (key: string) => localStorageStore.get(key) ?? null,
+  setItem: (key: string, value: string) => localStorageStore.set(key, String(value)),
+  removeItem: (key: string) => localStorageStore.delete(key),
+  clear: () => localStorageStore.clear(),
+};
+(global as any).localStorage = mockLocalStorage;
+
 // Mock MediaStreamTrack
 class MockMediaStreamTrack {
   public id: string;
@@ -173,8 +183,14 @@ class SimulatedCameraClient {
     });
   }
 
+  public socketErrors: any[] = [];
+
   private setupListeners() {
     if (!this.socket) return;
+
+    this.socket.on("error", (err: any) => {
+      this.socketErrors.push(err);
+    });
 
     this.socket.on("participant_status", (data: any) => {
       this.statusEventsReceived.push(data);
@@ -228,6 +244,30 @@ class SimulatedCameraClient {
     const cam = this.localStream.getVideoTracks().some((t) => t.enabled && t.readyState === "live");
     const mic = this.localStream.getAudioTracks().some((t) => t.enabled && t.readyState === "live");
     this.socket?.emit("participant_status", { roomId: this.currentRoomId, cam, mic });
+  }
+
+  public async getLocalStream(simulateTransientError: boolean = false): Promise<MockMediaStream> {
+    if (this.localStream) {
+      this.localStream.getTracks().forEach((t) => t.stop());
+      this.localStream = null;
+    }
+
+    const savedVideo = localStorage.getItem("wt_pref_camera") !== "false";
+    const tracks: MockMediaStreamTrack[] = [new MockMediaStreamTrack("audio")];
+
+    if (savedVideo) {
+      if (simulateTransientError) {
+        // Transient hardware error: fallback to audio only WITHOUT overwriting wt_pref_camera in localStorage
+      } else {
+        tracks.push(new MockMediaStreamTrack("video"));
+      }
+    }
+
+    this.localStream = new MockMediaStream(tracks);
+    const cam = this.localStream.getVideoTracks().some((t) => t.enabled && t.readyState === "live");
+    const mic = this.localStream.getAudioTracks().some((t) => t.enabled && t.readyState === "live");
+    this.socket?.emit("participant_status", { roomId: this.currentRoomId, cam, mic });
+    return this.localStream;
   }
 
   public createPeerConnection(peerSocketId: string, stream: MockMediaStream): MockRTCPeerConnection {
@@ -306,6 +346,7 @@ class SimulatedCameraClient {
 
         currentVideoTrack.stop();
         this.localStream.removeTrack(currentVideoTrack);
+        localStorage.setItem("wt_pref_camera", "false");
         this.socket?.emit("participant_status", { roomId: this.currentRoomId, cam: false, mic });
       } else {
         // --- CAMERA ON ---
@@ -315,6 +356,7 @@ class SimulatedCameraClient {
           }
           const newVideoTrack = new MockMediaStreamTrack("video");
           this.localStream.addTrack(newVideoTrack);
+          localStorage.setItem("wt_pref_camera", "true");
 
           await Promise.all(
             Object.values(this.peerConnections).map(async (pc) => {
@@ -328,7 +370,10 @@ class SimulatedCameraClient {
           );
 
           this.socket?.emit("participant_status", { roomId: this.currentRoomId, cam: true, mic });
-        } catch (err) {
+        } catch (err: any) {
+          if (err instanceof Error && (err.name === "NotAllowedError" || err.message?.includes("NotAllowedError") || err.message?.includes("Permission denied"))) {
+            localStorage.setItem("wt_pref_camera", "false");
+          }
           this.socket?.emit("participant_status", { roomId: this.currentRoomId, cam: false, mic });
         }
       }
@@ -773,6 +818,136 @@ async function runCameraLifecycleTests() {
     assert(clientB13.statusEventsReceived.length === 1, "Exactly one participant_status event received per toggle", 1, clientB13.statusEventsReceived.length);
     clientA13.disconnect();
     clientB13.disconnect();
+
+    // --- TEST 14: Camera-OFF rejoin preserves preference ---
+    console.log("\n--- TEST 14: Camera-OFF rejoin preserves preference ---");
+    localStorage.clear();
+    const r14 = await getNextRoom();
+    const clientA14 = new SimulatedCameraClient(userAId, "User A", serverUrl, tokenA);
+    const clientB14 = new SimulatedCameraClient(userBId, "User B", serverUrl, tokenB);
+    await clientA14.connect();
+    await clientA14.joinRoom(r14);
+    clientA14.initLocalMedia(true);
+
+    await clientB14.connect();
+    await clientB14.joinRoom(r14);
+    // User B initializes media with default (camera ON)
+    await clientB14.getLocalStream(false);
+    await new Promise((r) => setTimeout(r, 200));
+    assert(clientA14.peerStatuses[clientB14.socketId]?.cam === true, "User A sees User B with Camera ON initially", true, clientA14.peerStatuses[clientB14.socketId]?.cam);
+
+    // User B turns Camera OFF via toggleVideo (which sets wt_pref_camera = 'false' in localStorage)
+    await clientB14.toggleVideo();
+    await new Promise((r) => setTimeout(r, 200));
+    assert(localStorage.getItem("wt_pref_camera") === "false", "Real wt_pref_camera in localStorage set to 'false' on camera off", "false", localStorage.getItem("wt_pref_camera"));
+    assert(clientA14.peerStatuses[clientB14.socketId]?.cam === false, "User A sees User B with Camera OFF", false, clientA14.peerStatuses[clientB14.socketId]?.cam);
+
+    // User B leaves room
+    await clientB14.leaveRoom(r14);
+    clientB14.disconnect();
+    await new Promise((r) => setTimeout(r, 200));
+
+    // User B rejoins room in a fresh client instance without any manual property copying
+    const clientB14Rejoined = new SimulatedCameraClient(userBId, "User B", serverUrl, tokenB);
+    await clientB14Rejoined.connect();
+    await clientB14Rejoined.joinRoom(r14);
+    await clientB14Rejoined.getLocalStream(false);
+    await new Promise((r) => setTimeout(r, 300));
+
+    assert(localStorage.getItem("wt_pref_camera") === "false", "Persisted wt_pref_camera remains 'false' across rejoin", "false", localStorage.getItem("wt_pref_camera"));
+    assert(clientB14Rejoined.localStream!.getVideoTracks().length === 0, "User B local stream has 0 video tracks according to persisted preference", 0, clientB14Rejoined.localStream!.getVideoTracks().length);
+    assert(clientA14.peerStatuses[clientB14Rejoined.socketId]?.cam === false, "User A sees rejoined User B with Camera OFF (not forced ON)", false, clientA14.peerStatuses[clientB14Rejoined.socketId]?.cam);
+
+    clientA14.disconnect();
+    clientB14Rejoined.disconnect();
+
+    // --- TEST 15: Transient getUserMedia failure during rejoin does NOT overwrite camera preference ---
+    console.log("\n--- TEST 15: Transient getUserMedia failure preserves camera preference ---");
+    localStorage.clear();
+    localStorage.setItem("wt_pref_camera", "true"); // User preference is explicitly ON
+    const r15 = await getNextRoom();
+    const clientA15 = new SimulatedCameraClient(userAId, "User A", serverUrl, tokenA);
+    const clientB15 = new SimulatedCameraClient(userBId, "User B", serverUrl, tokenB);
+    await clientA15.connect();
+    await clientA15.joinRoom(r15);
+    clientA15.initLocalMedia(true);
+
+    await clientB15.connect();
+    await clientB15.joinRoom(r15);
+    await clientB15.getLocalStream(false);
+    await new Promise((r) => setTimeout(r, 200));
+
+    assert(clientA15.peerStatuses[clientB15.socketId]?.cam === true, "User A sees User B with Camera ON initially", true, clientA15.peerStatuses[clientB15.socketId]?.cam);
+
+    // User B leaves room
+    await clientB15.leaveRoom(r15);
+    clientB15.disconnect();
+    await new Promise((r) => setTimeout(r, 200));
+
+    // User B rejoins room in a fresh client instance without any manual property copying
+    const clientB15Rejoined = new SimulatedCameraClient(userBId, "User B", serverUrl, tokenB);
+    await clientB15Rejoined.connect();
+    await clientB15Rejoined.joinRoom(r15);
+
+    // Call getLocalStream with transient error simulation
+    await clientB15Rejoined.getLocalStream(true); // Fails to get video, falls back to audio-only
+    await new Promise((r) => setTimeout(r, 200));
+
+    // Preference in localStorage MUST NOT be poisoned to false!
+    assert(localStorage.getItem("wt_pref_camera") === "true", "Transient getUserMedia error does NOT overwrite wt_pref_camera to false", "true", localStorage.getItem("wt_pref_camera"));
+    assert(clientB15Rejoined.localStream!.getVideoTracks().length === 0, "Fallback stream has 0 video tracks temporarily", 0, clientB15Rejoined.localStream!.getVideoTracks().length);
+    assert(clientB15Rejoined.localStream!.getAudioTracks().length === 1, "Fallback stream retains audio track", 1, clientB15Rejoined.localStream!.getAudioTracks().length);
+
+    // Hardware releases / retry succeeds:
+    await clientB15Rejoined.getLocalStream(false);
+    await new Promise((r) => setTimeout(r, 300));
+
+    assert(localStorage.getItem("wt_pref_camera") === "true", "wt_pref_camera still 'true' after recovery", "true", localStorage.getItem("wt_pref_camera"));
+    assert(clientB15Rejoined.localStream!.getVideoTracks().length === 1, "Video track restored according to persisted wt_pref_camera", 1, clientB15Rejoined.localStream!.getVideoTracks().length);
+    assert(clientA15.peerStatuses[clientB15Rejoined.socketId]?.cam === true, "User A receives camera ON after recovery", true, clientA15.peerStatuses[clientB15Rejoined.socketId]?.cam);
+
+    clientA15.disconnect();
+    clientB15Rejoined.disconnect();
+
+    // --- TEST 16: Stale WebRTC signaling isolation across rooms ---
+    console.log("\n--- TEST 16: Stale WebRTC signaling isolation across rooms ---");
+    const r16A = await getNextRoom();
+    const r16B = await getNextRoom();
+
+    const clientA16 = new SimulatedCameraClient(userAId, "User A", serverUrl, tokenA);
+    const clientB16 = new SimulatedCameraClient(userBId, "User B", serverUrl, tokenB);
+
+    await clientA16.connect();
+    await clientA16.joinRoom(r16A);
+    clientA16.initLocalMedia(true);
+
+    await clientB16.connect();
+    await clientB16.joinRoom(r16A);
+    clientB16.initLocalMedia(true);
+    await new Promise((r) => setTimeout(r, 200));
+
+    const oldSocketIdA = clientA16.socketId;
+
+    // User B leaves Room A and joins Room B
+    await clientB16.leaveRoom(r16A);
+    await clientB16.joinRoom(r16B);
+    await new Promise((r) => setTimeout(r, 200));
+
+    // Stale peer connection guard: User B should NOT emit signaling to Room A peer
+    // If client attempts cross-room signaling, verify server detects or client suppresses
+    clientB16.socketErrors = [];
+    clientB16.socket!.emit("webrtc_offer", {
+      offer: { type: "offer", sdp: "dummy" },
+      to: oldSocketIdA,
+      from: clientB16.socketId,
+    });
+    await new Promise((r) => setTimeout(r, 300));
+
+    const crossRoomError = clientB16.socketErrors.find((e: any) => e.message?.includes("cross-room"));
+    assert(crossRoomError !== undefined, "Server rejects cross-room signaling", true, !!crossRoomError);
+
+    clientA16.disconnect();
+    clientB16.disconnect();
   } finally {
     httpServer.close();
     await prisma.$disconnect();

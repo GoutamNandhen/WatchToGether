@@ -45,22 +45,47 @@ export function useWebRTC(roomId: string) {
   });
 
   const getLocalStream = async () => {
-    let resolveMedia: (stream: MediaStream | null) => void;
-    if (!mediaPromise.current) {
-      mediaPromise.current = new Promise((res) => { resolveMedia = res; });
+    // Cleanly stop any existing local tracks before acquiring fresh media
+    if (localStream.current) {
+      localStream.current.getTracks().forEach((t) => {
+        try {
+          t.stop();
+          t.enabled = false;
+        } catch (e) {
+          console.warn("Error stopping old track:", e);
+        }
+      });
+      localStream.current = null;
     }
+
+    let resolveMedia: ((stream: MediaStream | null) => void) | undefined;
+    mediaPromise.current = new Promise((res) => {
+      resolveMedia = res;
+    });
 
     try {
       const savedVideo = localStorage.getItem('wt_pref_camera') !== 'false';
       const savedAudio = localStorage.getItem('wt_pref_mic') !== 'false';
 
       let stream: MediaStream;
-      try {
-        stream = await navigator.mediaDevices.getUserMedia({ video: savedVideo, audio: true });
-      } catch (err) {
-        console.warn("Failed with requested constraints, falling back to audio only", err);
+      if (savedVideo) {
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+        } catch (err) {
+          console.warn("Initial getUserMedia with video failed, retrying after release delay...", err);
+          // Wait 300ms to allow OS/browser to release camera hardware if user just left/rejoined
+          await new Promise((r) => setTimeout(r, 300));
+          try {
+            stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+          } catch (retryErr) {
+            console.warn("Retry failed, falling back to audio-only (preserving wt_pref_camera preference):", retryErr);
+            stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            // IMPORTANT: Never write wt_pref_camera = 'false' here on transient hardware failure
+          }
+        }
+      } else {
+        // User explicitly preferred camera off
         stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        localStorage.setItem('wt_pref_camera', 'false');
       }
 
       const audioTrack = stream.getAudioTracks()[0];
@@ -70,7 +95,7 @@ export function useWebRTC(roomId: string) {
 
       localStream.current = stream;
       setLocalStreamState(stream);
-      if (resolveMedia!) resolveMedia(stream);
+      if (resolveMedia) resolveMedia(stream);
 
       // Broadcast initial status once media is acquired
       const cam = stream.getVideoTracks().some((t) => t.enabled && t.readyState === "live");
@@ -80,7 +105,7 @@ export function useWebRTC(roomId: string) {
       return stream;
     } catch (err) {
       console.error("Failed to get any local stream", err);
-      if (resolveMedia!) resolveMedia(null);
+      if (resolveMedia) resolveMedia(null);
       socket?.emit("participant_status", { roomId, cam: false, mic: false });
       return null;
     }
@@ -101,7 +126,11 @@ export function useWebRTC(roomId: string) {
       });
 
       pc.onicecandidate = (event) => {
-        if (event.candidate && socket) {
+        if (!isMounted || pc.signalingState === "closed") return;
+        const currentSession = useSocketStore.getState().currentRoomSession;
+        if (!currentSession || currentSession.roomId !== roomId) return;
+
+        if (event.candidate && socket && socket.connected) {
           socket.emit("webrtc_ice_candidate", {
             candidate: event.candidate,
             to: peerSocketId,
@@ -112,10 +141,14 @@ export function useWebRTC(roomId: string) {
 
       pc.onnegotiationneeded = async () => {
         try {
-          if (pc.signalingState !== "stable") return;
+          if (!isMounted || pc.signalingState !== "stable") return;
+          const currentSession = useSocketStore.getState().currentRoomSession;
+          if (!currentSession || currentSession.roomId !== roomId) return;
+
           const offer = await pc.createOffer();
-          if (pc.signalingState !== "stable") return;
+          if (!isMounted || pc.signalingState !== "stable") return;
           await pc.setLocalDescription(offer);
+          if (!isMounted || (pc.signalingState as string) === "closed") return;
           socket?.emit("webrtc_offer", { offer, to: peerSocketId, from: socket.id });
         } catch (err) {
           console.error("Negotiation error", err);
@@ -235,6 +268,8 @@ export function useWebRTC(roomId: string) {
 
     socket.on("webrtc_offer", async ({ offer, from }) => {
       if (!isMounted) return;
+      const currentSession = useSocketStore.getState().currentRoomSession;
+      if (!currentSession || currentSession.roomId !== roomId) return;
       const ready = await waitForMedia();
       if (!isMounted || !ready) return;
       
@@ -269,6 +304,8 @@ export function useWebRTC(roomId: string) {
 
     socket.on("webrtc_answer", async ({ answer, from }) => {
       if (!isMounted) return;
+      const currentSession = useSocketStore.getState().currentRoomSession;
+      if (!currentSession || currentSession.roomId !== roomId) return;
       const ready = await waitForMedia();
       if (!isMounted || !ready) return;
       
@@ -284,6 +321,8 @@ export function useWebRTC(roomId: string) {
 
     socket.on("webrtc_ice_candidate", async ({ candidate, from }) => {
       if (!isMounted) return;
+      const currentSession = useSocketStore.getState().currentRoomSession;
+      if (!currentSession || currentSession.roomId !== roomId) return;
       const ready = await waitForMedia();
       if (!isMounted || !ready) return;
       
@@ -374,7 +413,45 @@ export function useWebRTC(roomId: string) {
       setScreenShares({});
     };
 
+    const handleSocketConnect = async () => {
+      if (!isMounted) return;
+      const currentSession = useSocketStore.getState().currentRoomSession;
+      if (!currentSession || currentSession.roomId !== roomId) return;
+
+      console.log("Socket reconnected, restoring camera according to saved preference");
+      const savedVideo = localStorage.getItem("wt_pref_camera") !== "false";
+      const savedAudio = localStorage.getItem("wt_pref_mic") !== "false";
+
+      const hasLiveVideo = (localStream.current?.getVideoTracks() || []).some(
+        (t) => t.enabled && t.readyState === "live"
+      );
+      const hasLiveAudio = (localStream.current?.getAudioTracks() || []).some(
+        (t) => t.readyState === "live"
+      );
+
+      if (!localStream.current || !hasLiveAudio || (savedVideo && !hasLiveVideo)) {
+        await getLocalStream();
+      } else {
+        const videoTrack = localStream.current.getVideoTracks()[0];
+        if (videoTrack) {
+          videoTrack.enabled = savedVideo;
+        }
+        const audioTrack = localStream.current.getAudioTracks()[0];
+        if (audioTrack) {
+          audioTrack.enabled = savedAudio;
+        }
+        const cam = (localStream.current.getVideoTracks() || []).some(
+          (t) => t.enabled && t.readyState === "live"
+        );
+        const mic = (localStream.current.getAudioTracks() || []).some(
+          (t) => t.enabled && t.readyState === "live"
+        );
+        socket.emit("participant_status", { roomId, cam, mic });
+      }
+    };
+
     socket.on("disconnect", handleSocketDisconnect);
+    socket.on("connect", handleSocketConnect);
 
     return () => {
       isMounted = false;
@@ -390,6 +467,7 @@ export function useWebRTC(roomId: string) {
       socket.off("screen_share_start");
       socket.off("screen_share_stop");
       socket.off("disconnect", handleSocketDisconnect);
+      socket.off("connect", handleSocketConnect);
 
       // 2. Close all RTCPeerConnections
       Object.values(peerConnections.current).forEach(pc => {
@@ -399,6 +477,8 @@ export function useWebRTC(roomId: string) {
         pc.close();
       });
       peerConnections.current = {};
+      pendingCandidates.current = {};
+      mediaPromise.current = null;
 
       // 3. Stop local media tracks
       if (localStream.current) {
@@ -418,6 +498,7 @@ export function useWebRTC(roomId: string) {
         screenStreamRef.current = null;
       }
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [socket, user, roomId]);
 
   const toggleVideo = async () => {
@@ -473,8 +554,10 @@ export function useWebRTC(roomId: string) {
           setLocalStreamState(new MediaStream(localStream.current.getTracks()));
         } catch (err) {
           console.error("Failed to re-enable camera:", err);
-          // On permission denial or hardware failure, record cam: false and do not crash
-          localStorage.setItem("wt_pref_camera", "false");
+          // Only update preference if user explicitly denied permission
+          if (err instanceof Error && (err.name === "NotAllowedError" || err.name === "PermissionDeniedError")) {
+            localStorage.setItem("wt_pref_camera", "false");
+          }
           socket?.emit("participant_status", { roomId, cam: false, mic });
           setLocalStreamState(new MediaStream(localStream.current.getTracks()));
         }

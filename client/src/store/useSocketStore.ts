@@ -84,7 +84,11 @@ export const useSocketStore = create<SocketState>((set, get) => ({
         const errorMsg = typeof err === 'object' && err !== null && 'message' in err
           ? String((err as { message?: string }).message)
           : String(err);
-        if (errorMsg.includes("Password") || errorMsg.includes("Unauthorized") || errorMsg.includes("Room not found")) {
+        if (
+          errorMsg.includes("Password") ||
+          errorMsg.includes("Unauthorized userId mismatch") ||
+          errorMsg.includes("Room not found")
+        ) {
           set({ reconnectError: errorMsg });
         }
       });
