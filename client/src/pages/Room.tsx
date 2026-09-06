@@ -416,7 +416,11 @@ export default function Room() {
       <div className="flex-1 flex flex-col h-full relative z-0 bg-black">
         <div 
           ref={videoContainerRef} 
-          className="flex-1 flex items-center justify-center relative w-full h-full bg-black"
+          className={isFullscreen 
+            ? "w-[100vw] h-[100vh] max-w-none max-h-none flex items-center justify-center relative bg-black overflow-hidden" 
+            : "flex-1 flex items-center justify-center relative w-full h-full bg-black"
+          }
+          style={isFullscreen ? { width: '100vw', height: '100vh', maxWidth: 'none', maxHeight: 'none' } : undefined}
         >
           {/* Edge Triggers (Always Active) */}
           <div className="absolute top-0 left-0 right-0 h-4 z-[9999]" onMouseEnter={() => setHoverZones(p => ({ ...p, top: true }))} />
@@ -485,7 +489,14 @@ export default function Room() {
 
           {/* Main Screen Renderer */}
           {mainScreenSource === 'url' ? (
-            id ? <VideoPlayer ref={videoPlayerRef} roomId={id} isFullscreen={isFullscreen} isHost={isHost} broadcastMediaStream={broadcastMediaStream} shareScreen={shareScreen} /> : null
+            id ? (
+              <div 
+                className={isFullscreen ? "w-[100vw] h-[100vh] max-w-none max-h-none flex-1 flex" : "w-full h-full flex-1 flex"}
+                style={isFullscreen ? { width: '100vw', height: '100vh', maxWidth: 'none', maxHeight: 'none' } : undefined}
+              >
+                <VideoPlayer ref={videoPlayerRef} roomId={id} isFullscreen={isFullscreen} isHost={isHost} broadcastMediaStream={broadcastMediaStream} shareScreen={shareScreen} />
+              </div>
+            ) : null
           ) : (
             (() => {
               const streamToRender = [
@@ -494,11 +505,21 @@ export default function Room() {
               ].find(s => s && s.id === mainScreenSource);
 
               if (!streamToRender) {
-                return id ? <VideoPlayer ref={videoPlayerRef} roomId={id} isFullscreen={isFullscreen} isHost={isHost} broadcastMediaStream={broadcastMediaStream} shareScreen={shareScreen} /> : null;
+                return id ? (
+                  <div 
+                    className={isFullscreen ? "w-[100vw] h-[100vh] max-w-none max-h-none flex-1 flex" : "w-full h-full flex-1 flex"}
+                    style={isFullscreen ? { width: '100vw', height: '100vh', maxWidth: 'none', maxHeight: 'none' } : undefined}
+                  >
+                    <VideoPlayer ref={videoPlayerRef} roomId={id} isFullscreen={isFullscreen} isHost={isHost} broadcastMediaStream={broadcastMediaStream} shareScreen={shareScreen} />
+                  </div>
+                ) : null;
               }
 
               return (
-                <div className={`w-full h-full flex items-center justify-center bg-black ${isFullscreen ? '' : 'p-4'}`}>
+                <div 
+                  className={`w-full h-full flex items-center justify-center bg-black ${isFullscreen ? 'w-[100vw] h-[100vh] max-w-none max-h-none' : 'p-4'}`}
+                  style={isFullscreen ? { width: '100vw', height: '100vh', maxWidth: 'none', maxHeight: 'none' } : undefined}
+                >
                   <video 
                     ref={el => { 
                       if (el && streamToRender && el.srcObject !== streamToRender) {
@@ -508,7 +529,8 @@ export default function Room() {
                     }}
                     autoPlay 
                     playsInline 
-                    className={`max-w-full max-h-full object-contain ${isFullscreen ? '' : 'rounded-xl shadow-2xl border border-slate-800'}`}
+                    className={`w-full h-full object-contain ${isFullscreen ? 'max-w-[100vw] max-h-[100vh] rounded-none border-0' : 'max-w-full max-h-full rounded-xl shadow-2xl border border-slate-800'}`}
+                    style={isFullscreen ? { width: '100%', height: '100%', maxWidth: '100vw', maxHeight: '100vh' } : undefined}
                   />
                 </div>
               );

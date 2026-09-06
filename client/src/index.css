@@ -6,4 +6,17 @@
   body {
     @apply bg-slate-900 text-slate-100 antialiased;
   }
+
+  :fullscreen,
+  :-webkit-full-screen {
+    width: 100vw !important;
+    height: 100vh !important;
+    max-width: none !important;
+    max-height: none !important;
+    min-width: 100vw !important;
+    min-height: 100vh !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    box-sizing: border-box !important;
+  }
 }
