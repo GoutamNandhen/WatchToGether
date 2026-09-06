@@ -4,6 +4,7 @@ import { useAuthStore } from "../store/useAuthStore";
 import { useSocketStore } from "../store/useSocketStore";
 import VideoPlayer from "../components/VideoPlayer";
 import VideoGrid from "../components/VideoGrid";
+import RemoteAudioManager from "../components/RemoteAudioManager";
 import { useWebRTC } from "../hooks/useWebRTC";
 import { useVoiceActivityDetection } from "../hooks/useVoiceActivityDetection";
 import { useAudioStore } from "../store/useAudioStore";
@@ -324,6 +325,13 @@ export default function Room() {
 
   return (
     <div className="flex h-screen bg-black overflow-hidden" ref={mainContainerRef}>
+      {/* Dedicated Remote WebRTC Audio Pipeline (decoupled from camera tiles/sidebar) */}
+      <RemoteAudioManager
+        peers={peers}
+        peerStatuses={peerStatuses}
+        screenShares={screenShares}
+      />
+
       {/* Main Video Area */}
       <div className="flex-1 flex flex-col h-full relative z-0 bg-black">
         <div 

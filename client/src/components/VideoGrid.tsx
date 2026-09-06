@@ -21,7 +21,6 @@ interface VideoPlayerProps {
 function StreamPlayer({
   stream,
   isLocal,
-  muted = false,
   isActiveSpeaker = false,
   isCircle = false,
   isMicOn = true,
@@ -50,7 +49,7 @@ function StreamPlayer({
         ref={videoRef}
         autoPlay
         playsInline
-        muted={isLocal || muted}
+        muted={true}
         className={`w-full h-full object-cover ${isLocal ? "scale-x-[-1]" : ""} ${
           !showVideo ? "opacity-0 pointer-events-none absolute inset-0" : ""
         }`}
