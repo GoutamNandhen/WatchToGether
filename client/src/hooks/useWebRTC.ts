@@ -33,6 +33,7 @@ export function useWebRTC(roomId: string) {
   const [screenShares, setScreenShares] = useState<Record<string, MediaStream>>({}); // socketId -> screenShareStream
   const [localStreamState, setLocalStreamState] = useState<MediaStream | null>(null);
   const [screenStreamState, setScreenStreamState] = useState<MediaStream | null>(null);
+  const [selectedAudioDeviceId, setSelectedAudioDeviceId] = useState<string>(() => localStorage.getItem("wt_pref_mic_device") || "");
   const localStream = useRef<MediaStream | null>(null);
   const screenStreamRef = useRef<MediaStream | null>(null);
   const peerConnections = useRef<PeerConnection>({});
@@ -66,26 +67,39 @@ export function useWebRTC(roomId: string) {
     try {
       const savedVideo = localStorage.getItem('wt_pref_camera') !== 'false';
       const savedAudio = localStorage.getItem('wt_pref_mic') !== 'false';
+      const savedAudioDevice = localStorage.getItem('wt_pref_mic_device');
+      const audioConstraints: MediaTrackConstraints | boolean = savedAudioDevice
+        ? { deviceId: savedAudioDevice }
+        : true;
+
+      const acquireAudioOnly = async (): Promise<MediaStream> => {
+        try {
+          return await navigator.mediaDevices.getUserMedia({ audio: audioConstraints });
+        } catch (deviceErr) {
+          console.warn("Audio constraint failed, falling back to default audio:", deviceErr);
+          return await navigator.mediaDevices.getUserMedia({ audio: true });
+        }
+      };
 
       let stream: MediaStream;
       if (savedVideo) {
         try {
-          stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+          stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: audioConstraints });
         } catch (err) {
           console.warn("Initial getUserMedia with video failed, retrying after release delay...", err);
           // Wait 300ms to allow OS/browser to release camera hardware if user just left/rejoined
           await new Promise((r) => setTimeout(r, 300));
           try {
-            stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+            stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: audioConstraints });
           } catch (retryErr) {
             console.warn("Retry failed, falling back to audio-only (preserving wt_pref_camera preference):", retryErr);
-            stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            stream = await acquireAudioOnly();
             // IMPORTANT: Never write wt_pref_camera = 'false' here on transient hardware failure
           }
         }
       } else {
         // User explicitly preferred camera off
-        stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        stream = await acquireAudioOnly();
       }
 
       const audioTrack = stream.getAudioTracks()[0];
@@ -656,5 +670,90 @@ export function useWebRTC(roomId: string) {
     }
   };
 
-  return { getLocalStream, localStream, localStreamState, screenStreamState, peers, peerStatuses, screenShares, toggleAudio, toggleVideo, shareScreen, broadcastMediaStream };
+  const switchAudioDevice = async (deviceId: string): Promise<boolean> => {
+    if (!deviceId) return false;
+
+    // Check current mic state
+    const oldTrack = localStream.current?.getAudioTracks()[0];
+    const wasEnabled = oldTrack
+      ? oldTrack.enabled
+      : localStorage.getItem("wt_pref_mic") !== "false";
+
+    let newStream: MediaStream;
+    try {
+      newStream = await navigator.mediaDevices.getUserMedia({
+        audio: { deviceId: { exact: deviceId } },
+      });
+    } catch (err) {
+      console.warn(`[useWebRTC] Exact deviceId failed, attempting fallback to ideal deviceId:`, err);
+      try {
+        newStream = await navigator.mediaDevices.getUserMedia({
+          audio: { deviceId },
+        });
+      } catch (fallbackErr) {
+        console.error(`[useWebRTC] Failed to acquire new audio device ${deviceId}:`, fallbackErr);
+        // Requirement: Handle the case where the selected device disappears or getUserMedia fails without breaking the existing microphone.
+        return false;
+      }
+    }
+
+    const newAudioTrack = newStream.getAudioTracks()[0];
+    if (!newAudioTrack) {
+      console.error("[useWebRTC] New stream has no audio track");
+      return false;
+    }
+
+    // Requirement: Preserve current microphone enabled/disabled state.
+    newAudioTrack.enabled = wasEnabled;
+
+    // Requirement: Use RTCRtpSender.replaceTrack(newAudioTrack) for existing audio senders rather than rebuilding peer connections.
+    const replacePromises = Object.values(peerConnections.current).map(async (pc) => {
+      try {
+        const sender = pc.getSenders().find(
+          (s) => s.track === oldTrack || s.track?.kind === "audio"
+        );
+        if (sender) {
+          await sender.replaceTrack(newAudioTrack);
+        } else if (localStream.current) {
+          pc.addTrack(newAudioTrack, localStream.current);
+        }
+      } catch (pcErr) {
+        console.error("[useWebRTC] Failed to replaceTrack on peer connection:", pcErr);
+      }
+    });
+    await Promise.all(replacePromises);
+
+    // Requirement: stop the old microphone track
+    if (oldTrack) {
+      if (localStream.current) {
+        localStream.current.removeTrack(oldTrack);
+      }
+      oldTrack.stop();
+    }
+
+    // Requirement: update localStream.current
+    if (localStream.current) {
+      localStream.current.addTrack(newAudioTrack);
+    } else {
+      localStream.current = new MediaStream([newAudioTrack]);
+    }
+
+    // Requirement: update localStreamState
+    setLocalStreamState(new MediaStream(localStream.current.getTracks()));
+
+    // Requirement: emit the correct participant_status
+    const cam = localStream.current.getVideoTracks().some(
+      (t) => t.enabled && t.readyState === "live"
+    );
+    const mic = newAudioTrack.enabled && newAudioTrack.readyState === "live";
+    socket?.emit("participant_status", { roomId, cam, mic });
+
+    // Requirement: Persist selected microphone deviceId
+    localStorage.setItem("wt_pref_mic_device", deviceId);
+    setSelectedAudioDeviceId(deviceId);
+
+    return true;
+  };
+
+  return { getLocalStream, localStream, localStreamState, screenStreamState, peers, peerStatuses, screenShares, toggleAudio, toggleVideo, shareScreen, broadcastMediaStream, switchAudioDevice, selectedAudioDeviceId };
 }

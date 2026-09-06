@@ -457,6 +457,52 @@ class SimulatedAudioClient {
     this.screenShares = {};
     this.audioManager.syncPeers([]);
   }
+
+  public peerConnections: Map<string, { senders: { track: MockMediaStreamTrack | null; replaceTrackCalls: MockMediaStreamTrack[] }[] }> = new Map();
+
+  public async switchAudioDevice(newTrack: MockMediaStreamTrack, simulateFailure = false): Promise<boolean> {
+    if (simulateFailure) {
+      // Simulate getUserMedia failure without affecting existing tracks
+      return false;
+    }
+
+    const oldTrack = this.localStream?.getAudioTracks()[0];
+    const wasEnabled = oldTrack ? oldTrack.enabled : true;
+    newTrack.enabled = wasEnabled;
+
+    // Use RTCRtpSender.replaceTrack for existing senders
+    for (const pc of this.peerConnections.values()) {
+      const sender = pc.senders.find((s) => s.track === oldTrack || s.track?.kind === "audio");
+      if (sender) {
+        sender.track = newTrack;
+        sender.replaceTrackCalls.push(newTrack);
+      }
+    }
+
+    // Stop old track
+    if (oldTrack) {
+      if (this.localStream) {
+        this.localStream.removeTrack(oldTrack);
+      }
+      oldTrack.stop();
+    }
+
+    // Update localStream
+    if (this.localStream) {
+      this.localStream.addTrack(newTrack);
+    }
+
+    // Emit participant_status
+    const cam = this.localStream?.getVideoTracks().some((t) => t.enabled && t.readyState === "live") ?? false;
+    const mic = newTrack.enabled && newTrack.readyState === "live";
+    this.socket?.emit("participant_status", {
+      roomId: this.currentRoomId,
+      cam,
+      mic,
+    });
+
+    return true;
+  }
 }
 
 let testsPassed = 0;
@@ -505,7 +551,7 @@ async function runAudioTests() {
     create: { id: userB_id, email: "audio_pipeline_b@test.com", passwordHash: "hash", name: "User B" },
   });
 
-  for (const num of [1, 2, 5, 9, 10]) {
+  for (const num of [1, 2, 5, 9, 10, 11]) {
     const id = getRoomId(num);
     await prisma.room.upsert({
       where: { id },
@@ -802,6 +848,66 @@ async function runAudioTests() {
 
     clientA10.disconnect();
     clientB10.disconnect();
+
+    // -------------------------------------------------------------
+    // TEST 11: Microphone device switching replaces sender track, preserves mute state, and handles failure
+    // -------------------------------------------------------------
+    console.log("\n--- TEST 11: Microphone device switching ---");
+    const rId11 = getRoomId(11);
+
+    const clientA11 = new SimulatedAudioClient(userA_id, "User A", serverUrl, tokenA);
+    const clientB11 = new SimulatedAudioClient(userB_id, "User B", serverUrl, tokenB);
+
+    await clientA11.connect();
+    await clientA11.joinRoom(rId11, true, true);
+    await clientB11.connect();
+    await clientB11.joinRoom(rId11, true, true);
+
+    await new Promise((r) => setTimeout(r, 100));
+
+    // Setup mock peer connection on Client A with initial audio track
+    const initialAudioTrack = clientA11.localStream!.getAudioTracks()[0];
+    const mockSender = { track: initialAudioTrack, replaceTrackCalls: [] as MockMediaStreamTrack[] };
+    clientA11.peerConnections.set(clientB11.socketId, { senders: [mockSender] });
+
+    // 1. Switch to Device 2 while mic is ON
+    const device2Track = new MockMediaStreamTrack("audio");
+    const switchSuccess = await clientA11.switchAudioDevice(device2Track);
+    assert(switchSuccess === true, "Microphone switch returned success");
+    assert(mockSender.track === device2Track, "RTCRtpSender track replaced with new audio device track");
+    assert(mockSender.replaceTrackCalls.includes(device2Track), "RTCRtpSender.replaceTrack called with new device track");
+    assert(initialAudioTrack.readyState === "ended", "Old microphone track stopped cleanly");
+    assert(clientA11.localStream!.getAudioTracks()[0] === device2Track, "localStream updated with new audio track");
+    assert(device2Track.enabled === true, "Microphone enabled state preserved (was ON -> remains ON)");
+
+    await new Promise((r) => setTimeout(r, 100));
+    assert(clientB11.peerStatuses[clientA11.socketId]?.mic === true, "Remote peer receives mic: true after device switch");
+
+    // 2. Mute microphone and switch to Device 3
+    device2Track.enabled = false;
+    clientA11.socket?.emit("participant_status", { roomId: rId11, cam: true, mic: false });
+    await new Promise((r) => setTimeout(r, 100));
+
+    const device3Track = new MockMediaStreamTrack("audio");
+    const switchMutedSuccess = await clientA11.switchAudioDevice(device3Track);
+    assert(switchMutedSuccess === true, "Microphone switch while muted returned success");
+    assert(device3Track.enabled === false, "Muted state preserved on new track (was OFF -> remains OFF)");
+    assert(device2Track.readyState === "ended", "Previous device track stopped cleanly");
+    assert(mockSender.track === device3Track, "RTCRtpSender track updated to device 3 track");
+
+    await new Promise((r) => setTimeout(r, 100));
+    assert(clientB11.peerStatuses[clientA11.socketId]?.mic === false, "Remote peer receives mic: false for switched muted track");
+
+    // 3. Transient failure (unplugged or missing device)
+    const device4Track = new MockMediaStreamTrack("audio");
+    const failedSwitch = await clientA11.switchAudioDevice(device4Track, true);
+    assert(failedSwitch === false, "Switch returns false on acquisition failure");
+    assert(device3Track.readyState === "live", "Existing microphone track remains live when acquisition fails");
+    assert(mockSender.track === device3Track, "RTCRtpSender track NOT replaced when acquisition fails");
+    assert(clientA11.localStream!.getAudioTracks()[0] === device3Track, "localStream retains working microphone track");
+
+    clientA11.disconnect();
+    clientB11.disconnect();
 
   } finally {
     await prisma.$disconnect();

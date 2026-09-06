@@ -1,14 +1,53 @@
+import { useEffect, useState } from 'react';
 import { useAudioStore } from '../store/useAudioStore';
 import type { DuckingSpeed, AudioMode } from '../store/useAudioStore';
-import { X, Volume2, Settings2 } from 'lucide-react';
+import { X, Volume2, Settings2, Mic } from 'lucide-react';
 
 interface Props {
   isOpen: boolean;
   onClose: () => void;
+  switchAudioDevice?: (deviceId: string) => Promise<boolean>;
+  selectedAudioDeviceId?: string;
 }
 
-export default function AudioSettingsModal({ isOpen, onClose }: Props) {
+export default function AudioSettingsModal({ isOpen, onClose, switchAudioDevice, selectedAudioDeviceId }: Props) {
   const { settings, updateSettings } = useAudioStore();
+  const [audioDevices, setAudioDevices] = useState<MediaDeviceInfo[]>([]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+
+    let isMounted = true;
+    const fetchDevices = async () => {
+      try {
+        if (!navigator.mediaDevices?.enumerateDevices) return;
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        if (!isMounted) return;
+        const inputs = devices.filter((d) => d.kind === 'audioinput');
+        setAudioDevices(inputs);
+      } catch (err) {
+        console.warn("Failed to enumerate audio devices:", err);
+      }
+    };
+
+    fetchDevices();
+
+    const handleDeviceChange = () => {
+      fetchDevices();
+    };
+
+    navigator.mediaDevices?.addEventListener?.('devicechange', handleDeviceChange);
+    return () => {
+      isMounted = false;
+      navigator.mediaDevices?.removeEventListener?.('devicechange', handleDeviceChange);
+    };
+  }, [isOpen]);
+
+  const handleDeviceSelect = async (deviceId: string) => {
+    if (switchAudioDevice) {
+      await switchAudioDevice(deviceId);
+    }
+  };
 
   if (!isOpen) return null;
 
@@ -26,6 +65,31 @@ export default function AudioSettingsModal({ isOpen, onClose }: Props) {
         </div>
 
         <div className="p-6 space-y-6 max-h-[80vh] overflow-y-auto">
+          {/* Microphone Input Device Selection */}
+          <div className="space-y-2">
+            <h3 className="font-semibold text-slate-200 flex items-center gap-2">
+              <Mic size={16} className="text-indigo-400" />
+              Microphone Input Device
+            </h3>
+            <select
+              value={selectedAudioDeviceId || (audioDevices[0]?.deviceId ?? '')}
+              onChange={(e) => handleDeviceSelect(e.target.value)}
+              className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2 text-sm text-slate-300 focus:border-indigo-500 focus:outline-none"
+            >
+              {audioDevices.length > 0 ? (
+                audioDevices.map((device, index) => (
+                  <option key={device.deviceId || index} value={device.deviceId}>
+                    {device.label || `Microphone ${index + 1}`}
+                  </option>
+                ))
+              ) : (
+                <option value="">Default Microphone</option>
+              )}
+            </select>
+          </div>
+
+          <div className="border-t border-slate-800/80 my-2" />
+
           {/* Global Toggle */}
           <div className="flex items-center justify-between">
             <div>
