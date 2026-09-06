@@ -90,23 +90,27 @@ export default function Room() {
     });
   };
 
-  const toggleFullscreen = async () => {
+  const toggleFullscreen = () => {
     try {
-      if (!document.fullscreenElement) {
-        setIsFullscreen(true);
-        if (videoContainerRef.current) {
-          if (videoContainerRef.current.requestFullscreen) {
-            await videoContainerRef.current.requestFullscreen();
-          } else if ('webkitRequestFullscreen' in videoContainerRef.current) {
-            await (videoContainerRef.current as HTMLDivElement & { webkitRequestFullscreen: () => Promise<void> }).webkitRequestFullscreen();
+      const isCurrentlyFullscreen = !!(
+        document.fullscreenElement ||
+        (document as Document & { webkitFullscreenElement?: Element }).webkitFullscreenElement
+      );
+
+      if (!isCurrentlyFullscreen) {
+        const target = videoContainerRef.current;
+        if (target) {
+          if (target.requestFullscreen) {
+            target.requestFullscreen().catch((err) => console.error("Fullscreen request error:", err));
+          } else if ('webkitRequestFullscreen' in target) {
+            (target as HTMLDivElement & { webkitRequestFullscreen: () => Promise<void> }).webkitRequestFullscreen();
           }
         }
       } else {
-        setIsFullscreen(false);
         if (document.exitFullscreen) {
-          await document.exitFullscreen();
+          document.exitFullscreen().catch((err) => console.error("Fullscreen exit error:", err));
         } else if ('webkitExitFullscreen' in document) {
-          await (document as Document & { webkitExitFullscreen: () => Promise<void> }).webkitExitFullscreen();
+          (document as Document & { webkitExitFullscreen: () => Promise<void> }).webkitExitFullscreen();
         }
       }
     } catch (err) {
@@ -116,14 +120,18 @@ export default function Room() {
 
   useEffect(() => {
     const handleFullscreenChange = () => {
-      setIsFullscreen(!!document.fullscreenElement);
+      const isFs = !!(
+        document.fullscreenElement ||
+        (document as Document & { webkitFullscreenElement?: Element }).webkitFullscreenElement
+      );
+      setIsFullscreen(isFs);
     };
+
     document.addEventListener("fullscreenchange", handleFullscreenChange);
+    document.addEventListener("webkitfullscreenchange", handleFullscreenChange);
 
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        setIsFullscreen(false);
-      } else if (e.key.toLowerCase() === 'f' && (e.target as Node)?.nodeName !== 'INPUT' && (e.target as Node)?.nodeName !== 'TEXTAREA') {
+      if (e.key.toLowerCase() === 'f' && (e.target as Node)?.nodeName !== 'INPUT' && (e.target as Node)?.nodeName !== 'TEXTAREA') {
         toggleFullscreen();
       }
     };
@@ -131,17 +139,10 @@ export default function Room() {
 
     return () => {
       document.removeEventListener("fullscreenchange", handleFullscreenChange);
+      document.removeEventListener("webkitfullscreenchange", handleFullscreenChange);
       document.removeEventListener("keydown", handleKeyDown);
     };
   }, []);
-
-  useEffect(() => {
-    if (isFullscreen) {
-      // eslint-disable-next-line
-      setIsCameraSidebarOpen(false);
-      setIsChatOpen(false);
-    }
-  }, [isFullscreen]);
 
 
 
@@ -360,7 +361,7 @@ export default function Room() {
       <div className="flex-1 flex flex-col h-full relative z-0 bg-black">
         <div 
           ref={videoContainerRef} 
-          className={isFullscreen ? "fixed inset-0 z-[9999] bg-black flex items-center justify-center" : "flex-1 flex items-center justify-center relative w-full h-full bg-black"}
+          className="flex-1 flex items-center justify-center relative w-full h-full bg-black"
         >
           {/* Edge Triggers (Always Active) */}
           <div className="absolute top-0 left-0 right-0 h-4 z-[9999]" onMouseEnter={() => setHoverZones(p => ({ ...p, top: true }))} />
@@ -462,18 +463,28 @@ export default function Room() {
             onMouseLeave={() => setHoverZones(p => ({ ...p, right: false }))}
           >
             <div className="flex flex-col gap-2">
-              {!isCameraSidebarOpen && (
+              {(!isCameraSidebarOpen || isFullscreen) && (
                 <button 
-                  onClick={() => setIsCameraSidebarOpen(true)}
+                  onClick={() => {
+                    if (isFullscreen) {
+                      toggleFullscreen();
+                    }
+                    setIsCameraSidebarOpen(true);
+                  }}
                   className="bg-slate-800/90 hover:bg-indigo-600 text-white p-2.5 rounded-xl backdrop-blur shadow-lg transition-all border border-slate-700 flex items-center justify-center group"
                   title="Open Cameras Sidebar"
                 >
                   <Users size={20} className="group-hover:-translate-x-1 transition-transform" />
                 </button>
               )}
-              {!isChatOpen && (
+              {(!isChatOpen || isFullscreen) && (
                 <button 
-                  onClick={() => setIsChatOpen(true)}
+                  onClick={() => {
+                    if (isFullscreen) {
+                      toggleFullscreen();
+                    }
+                    setIsChatOpen(true);
+                  }}
                   className="bg-slate-800/90 hover:bg-indigo-600 text-white p-2.5 rounded-xl backdrop-blur shadow-lg transition-all border border-slate-700 flex items-center justify-center group"
                   title="Open Live Chat"
                 >
@@ -492,7 +503,7 @@ export default function Room() {
           </div>
           
           {/* Floating Cameras (rendered here so they overlay the video) */}
-          {id && !isCameraSidebarOpen && (
+          {id && (!isCameraSidebarOpen || isFullscreen) && (
             <VideoGrid 
               localStream={localStreamState || localStream.current} 
               screenStream={screenStreamState} 
@@ -515,7 +526,7 @@ export default function Room() {
       </div>
       
       {/* Camera Sidebar */}
-      {isCameraSidebarOpen && (
+      {!isFullscreen && isCameraSidebarOpen && (
         <div className="fixed md:relative right-0 w-full md:w-64 h-full bg-slate-900 border-l border-slate-800 flex flex-col shadow-2xl z-[9999] md:z-10 animate-in slide-in-from-right-8 duration-300">
           <div className="p-3 border-b border-slate-800 flex justify-between items-center bg-slate-950">
             <span className="font-semibold text-slate-200 text-sm flex items-center gap-2"><Users size={16}/> Cameras</span>
@@ -546,7 +557,7 @@ export default function Room() {
       )}
 
       {/* Live Chat Sidebar */}
-      {isChatOpen && (
+      {!isFullscreen && isChatOpen && (
         <div className="fixed md:relative right-0 w-full md:w-80 h-full bg-slate-950 border-l border-slate-900 flex flex-col shadow-2xl z-[9999] md:z-20 animate-in slide-in-from-right-8 duration-300">
           <div className="p-4 border-b border-slate-900 font-semibold flex flex-col gap-2 bg-slate-900/50">
             <div className="flex justify-between items-center">
