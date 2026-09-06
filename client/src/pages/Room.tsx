@@ -247,7 +247,11 @@ export default function Room() {
 
   // Automatically promote incoming screen-share / captured local video to main movie stage,
   // and cleanly revert to 'url' when the broadcast ends.
+  // If native fullscreen is currently active, defer promoting/replacing the main-stage
+  // renderer until fullscreen exits to prevent disruptive DOM unmounting that drops fullscreen.
   const prevRemoteStreamIdsRef = useRef<string[]>([]);
+  const pendingMainScreenSourceRef = useRef<string | null>(null);
+
   useEffect(() => {
     const activeRemoteStreams = Object.values(screenShares)
       .map((s) => (typeof s === "string" ? null : s))
@@ -259,19 +263,54 @@ export default function Room() {
     // Detect if a new remote broadcast stream arrived
     const newlyArrivedStream = activeRemoteStreams.find((s) => !prevStreamIds.includes(s.id));
 
+    const isFs = isFullscreen || !!(
+      document.fullscreenElement ||
+      (document as Document & { webkitFullscreenElement?: Element }).webkitFullscreenElement
+    );
+
     if (newlyArrivedStream) {
-      setMainScreenSource(newlyArrivedStream.id);
+      if (isFs) {
+        pendingMainScreenSourceRef.current = newlyArrivedStream.id;
+      } else {
+        setMainScreenSource(newlyArrivedStream.id);
+      }
     } else if (mainScreenSource !== 'url') {
       const isLocalActive = screenStreamState && screenStreamState.id === mainScreenSource;
       const isRemoteActive = activeRemoteStreamIds.includes(mainScreenSource);
 
       if (!isLocalActive && !isRemoteActive) {
-        setMainScreenSource('url');
+        if (isFs) {
+          pendingMainScreenSourceRef.current = 'url';
+        } else {
+          setMainScreenSource('url');
+        }
       }
     }
 
     prevRemoteStreamIdsRef.current = activeRemoteStreamIds;
-  }, [screenShares, screenStreamState, mainScreenSource]);
+  }, [screenShares, screenStreamState, mainScreenSource, isFullscreen]);
+
+  // When native fullscreen exits, apply any deferred/pending mainScreenSource promotion
+  useEffect(() => {
+    if (!isFullscreen && pendingMainScreenSourceRef.current !== null) {
+      const pending = pendingMainScreenSourceRef.current;
+      pendingMainScreenSourceRef.current = null;
+
+      if (pending === 'url') {
+        setMainScreenSource('url');
+      } else {
+        const isLocalActive = screenStreamState && screenStreamState.id === pending;
+        const isRemoteActive = Object.values(screenShares).some(
+          (s) => (typeof s === "string" ? s : s?.id) === pending
+        );
+        if (isLocalActive || isRemoteActive) {
+          setMainScreenSource(pending);
+        } else {
+          setMainScreenSource('url');
+        }
+      }
+    }
+  }, [isFullscreen, screenShares, screenStreamState]);
 
   useVoiceActivityDetection(id, localStreamState);
 
@@ -299,11 +338,27 @@ export default function Room() {
     });
 
     socket.on("screen_share_start", ({ streamId }) => {
-      setMainScreenSource(streamId);
+      const isFs = !!(
+        document.fullscreenElement ||
+        (document as Document & { webkitFullscreenElement?: Element }).webkitFullscreenElement
+      );
+      if (isFs) {
+        pendingMainScreenSourceRef.current = streamId;
+      } else {
+        setMainScreenSource(streamId);
+      }
     });
 
     socket.on("screen_share_stop", () => {
-      setMainScreenSource('url');
+      const isFs = !!(
+        document.fullscreenElement ||
+        (document as Document & { webkitFullscreenElement?: Element }).webkitFullscreenElement
+      );
+      if (isFs) {
+        pendingMainScreenSourceRef.current = 'url';
+      } else {
+        setMainScreenSource('url');
+      }
     });
 
     socket.on("new_cohost", ({ userId }) => {
@@ -400,7 +455,10 @@ export default function Room() {
             <div className="absolute top-4 left-4 z-50">
               <select 
                 value={mainScreenSource}
-                onChange={(e) => setMainScreenSource(e.target.value)}
+                onChange={(e) => {
+                  pendingMainScreenSourceRef.current = null;
+                  setMainScreenSource(e.target.value);
+                }}
                 className="bg-slate-900/80 text-white text-sm backdrop-blur-md px-3 py-1.5 rounded-lg border border-slate-700 shadow-lg focus:outline-none focus:border-indigo-500"
               >
                 <option value="url">Video Player (YouTube)</option>
