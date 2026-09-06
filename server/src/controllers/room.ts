@@ -2,6 +2,7 @@ import { Response } from "express";
 import { PrismaClient } from "@prisma/client";
 import { AuthRequest } from "../middlewares/authMiddleware";
 import nodemailer from "nodemailer";
+import { RoomManager } from "../managers/RoomManager";
 
 const prisma = new PrismaClient();
 
@@ -49,7 +50,7 @@ export const createRoom = async (req: AuthRequest, res: Response): Promise<void>
 export const getRooms = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const rooms = await prisma.room.findMany({
-      where: { isPrivate: false },
+      where: { isPrivate: false, isActive: true },
       include: { host: { select: { name: true } }, _count: { select: { participants: true } } },
       orderBy: { createdAt: 'desc' }
     });
@@ -73,6 +74,7 @@ export const getRoomById = async (req: AuthRequest, res: Response): Promise<void
         isPrivate: true,
         maxParticipants: true,
         hostId: true,
+        isActive: true,
         createdAt: true,
         host: { select: { name: true } },
         coHosts: true
@@ -253,10 +255,15 @@ export const endRoom = async (req: AuthRequest, res: Response): Promise<void> =>
       return;
     }
 
-    await prisma.room.update({
-      where: { id },
-      data: { isActive: false }
-    });
+    const roomManager = req.app.get("roomManager") as RoomManager | undefined;
+    if (roomManager) {
+      await roomManager.forceEndRoom(id);
+    } else {
+      await prisma.room.update({
+        where: { id },
+        data: { isActive: false }
+      });
+    }
     res.status(200).json({ message: "Room ended successfully" });
   } catch (error) {
     console.error("End Room Error:", error);

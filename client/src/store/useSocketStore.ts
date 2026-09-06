@@ -129,3 +129,7 @@ export const useSocketStore = create<SocketState>((set, get) => ({
   
   clearMessages: () => set({ messages: [] }),
 }));
+
+if (typeof window !== 'undefined') {
+  (window as unknown as Record<string, unknown>).__useSocketStore = useSocketStore;
+}

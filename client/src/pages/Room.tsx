@@ -18,7 +18,7 @@ export default function Room() {
   const location = useLocation();
   const { user } = useAuthStore();
   const navigate = useNavigate();
-  const { socket, connect, disconnect, joinRoom, leaveRoom, sendMessage, messages, clearMessages, connectionStatus, reconnectError } = useSocketStore();
+  const { socket, connect, joinRoom, leaveRoom, sendMessage, messages, clearMessages, connectionStatus, reconnectError } = useSocketStore();
   const [chatInput, setChatInput] = useState("");
   const chatRef = useRef<HTMLDivElement>(null);
   const { getLocalStream, localStream, localStreamState, screenStreamState, peers, peerStatuses, screenShares, toggleAudio, toggleVideo, shareScreen, broadcastMediaStream } = useWebRTC(id || "");
@@ -193,7 +193,6 @@ export default function Room() {
         leaveRoom(id, user.id, user.name);
       }
       clearMessages();
-      disconnect();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, user]);

@@ -39,7 +39,8 @@ app.get("/", (req, res) => {
 });
 
 // Socket.io Setup
-setupSocketHandlers(io);
+const roomManager = setupSocketHandlers(io);
+app.set("roomManager", roomManager);
 
 const PORT = process.env.PORT || 5000;
 

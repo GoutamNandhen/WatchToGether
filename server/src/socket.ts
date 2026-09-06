@@ -6,8 +6,11 @@ import * as schemas from "./schemas/socketSchemas";
 
 const prisma = new PrismaClient();
 
-export const setupSocketHandlers = (io: Server) => {
-  const roomManager = new RoomManager(io);
+export const setupSocketHandlers = (io: Server, gracePeriodOrManager?: number | RoomManager) => {
+  const roomManager =
+    gracePeriodOrManager instanceof RoomManager
+      ? gracePeriodOrManager
+      : new RoomManager(io, typeof gracePeriodOrManager === "number" ? gracePeriodOrManager : 10000);
 
   // Authentication Middleware
   io.use((socket, next) => {
@@ -35,69 +38,74 @@ export const setupSocketHandlers = (io: Server) => {
     });
 
     socket.on("join_room", async (data) => {
-      const payload = schemas.validateSocketPayload(schemas.joinRoomSchema, data, socket);
-      if (!payload) return;
-      
-      const { roomId, userName, password } = payload;
-      
-      // Ensure the user joins the room with their authenticated userId, not whatever they pass
-      if (payload.userId !== userId) {
-        socket.emit("error", { message: "Unauthorized userId mismatch" });
-        return;
-      }
+      try {
+        const payload = schemas.validateSocketPayload(schemas.joinRoomSchema, data, socket);
+        if (!payload) return;
 
-      // Authoritative check
-      const roomAuth = await prisma.room.findUnique({
-        where: { id: roomId },
-        select: { isPrivate: true, password: true, hostId: true }
-      });
+        const { roomId, userName, password } = payload;
 
-      if (!roomAuth) {
-        socket.emit("error", { message: "Room not found" });
-        return;
-      }
+        // Ensure the user joins the room with their authenticated userId, not whatever they pass
+        if (payload.userId !== userId) {
+          socket.emit("error", { message: "Unauthorized userId mismatch" });
+          return;
+        }
 
-      if (roomAuth.isPrivate) {
-        // Only require password if the user is not the host
-        if (roomAuth.hostId !== userId) {
-          // Check if user is a co-host, they bypass password
-          const cohost = await prisma.roomCoHost.findUnique({
-            where: { roomId_userId: { roomId, userId } }
-          });
-          
-          if (!cohost) {
-            if (!password) {
-              socket.emit("error", { message: "Password required for private room" });
-              return;
-            }
-            if (roomAuth.password && roomAuth.password !== password) {
-              socket.emit("error", { message: "Incorrect password" });
-              return;
+        // Authoritative check
+        const roomAuth = await prisma.room.findUnique({
+          where: { id: roomId },
+          select: { isPrivate: true, password: true, hostId: true }
+        });
+
+        if (!roomAuth) {
+          socket.emit("error", { message: "Room not found" });
+          return;
+        }
+
+        if (roomAuth.isPrivate) {
+          // Only require password if the user is not the host
+          if (roomAuth.hostId !== userId) {
+            // Check if user is a co-host, they bypass password
+            const cohost = await prisma.roomCoHost.findUnique({
+              where: { roomId_userId: { roomId, userId } }
+            });
+
+            if (!cohost) {
+              if (!password) {
+                socket.emit("error", { message: "Password required for private room" });
+                return;
+              }
+              if (roomAuth.password && roomAuth.password !== password) {
+                socket.emit("error", { message: "Incorrect password" });
+                return;
+              }
             }
           }
         }
+
+        const success = await roomManager.handleJoin(roomId, socket.id, userId, userName);
+        if (!success) {
+          socket.emit("error", { message: "Room not found" });
+          return;
+        }
+
+        socket.join(roomId);
+        console.log(`User ${userName} (${userId}) joined room ${roomId} on socket ${socket.id}`);
+
+        const room = roomManager.getRoom(roomId);
+
+        // Send the current authoritative state to the joining user
+        if (room) {
+          socket.emit("sync_response", { ...room.playback, serverTime: Date.now() });
+          socket.emit("room_state", { hostId: room.hostId, coHosts: Array.from(room.coHosts) });
+          socket.emit("room_participant_statuses", roomManager.getParticipantStatuses(roomId));
+        }
+
+        // Broadcast to room that a user joined
+        socket.to(roomId).emit("user_joined", { userId, userName, socketId: socket.id });
+      } catch (err) {
+        console.error("Error in join_room:", err);
+        socket.emit("error", { message: "Internal server error joining room" });
       }
-
-      const success = await roomManager.handleJoin(roomId, socket.id, userId, userName);
-      if (!success) {
-        socket.emit("error", { message: "Room not found" });
-        return;
-      }
-
-      socket.join(roomId);
-      console.log(`User ${userName} (${userId}) joined room ${roomId}`);
-
-      const room = roomManager.getRoom(roomId);
-      
-      // Send the current authoritative state to the joining user
-      if (room) {
-        socket.emit("sync_response", { ...room.playback, serverTime: Date.now() });
-        socket.emit("room_state", { hostId: room.hostId, coHosts: Array.from(room.coHosts) });
-        socket.emit("room_participant_statuses", roomManager.getParticipantStatuses(roomId));
-      }
-
-      // Broadcast to room that a user joined
-      socket.to(roomId).emit("user_joined", { userId, userName, socketId: socket.id });
     });
 
     socket.on("send_message", async (data) => {
@@ -128,13 +136,16 @@ export const setupSocketHandlers = (io: Server) => {
       }
     });
 
-    socket.on("leave_room", async (data) => {
+    socket.on("leave_room", async (data, callback?: () => void) => {
       const payload = schemas.validateSocketPayload(schemas.joinRoomSchema, data, socket);
       if (!payload) return;
       if (payload.userId !== userId) return;
 
       socket.leave(payload.roomId);
       await roomManager.handleLeave(payload.roomId, socket.id, userId);
+      if (typeof callback === "function") {
+        callback();
+      }
     });
 
     // --- HOST/CO-HOST PRIVILEGED EVENTS ---

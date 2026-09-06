@@ -25,9 +25,11 @@ export class RoomManager {
   private rooms: Map<string, RoomState> = new Map();
   private pendingRooms: Map<string, Promise<RoomState | null>> = new Map();
   private io: Server;
+  public gracePeriodMs: number;
 
-  constructor(io: Server) {
+  constructor(io: Server, gracePeriodMs: number = 10000) {
     this.io = io;
+    this.gracePeriodMs = gracePeriodMs;
   }
 
   public async getOrCreateRoom(roomId: string): Promise<RoomState | null> {
@@ -104,7 +106,7 @@ export class RoomManager {
     const room = await this.getOrCreateRoom(roomId);
     if (!room) return false;
 
-    // Check if user was in disconnected state and cancel the timeout
+    // Check if user was in disconnected state and cancel the pending timeout
     const staleSocketIds: string[] = [];
     for (const [discSocketId, data] of room.disconnectedParticipants.entries()) {
       if (data.userId === userId) {
@@ -114,13 +116,18 @@ export class RoomManager {
       }
     }
 
-    // Check if user already had another active socket in the room and clean it up
+    // Check if user had any dead/stale sockets in the room and clean them up
+    // Note: If an existing socket is still actively connected (e.g. another tab), do not evict it.
     for (const [sId, uId] of room.participants.entries()) {
       if (uId === userId && sId !== socketId) {
-        room.participants.delete(sId);
-        room.participantStatuses.delete(sId);
-        if (!staleSocketIds.includes(sId)) {
-          staleSocketIds.push(sId);
+        const existingSocket = this.io.sockets?.sockets?.get(sId);
+        const isStillConnected = existingSocket && existingSocket.connected;
+        if (!isStillConnected) {
+          room.participants.delete(sId);
+          room.participantStatuses.delete(sId);
+          if (!staleSocketIds.includes(sId)) {
+            staleSocketIds.push(sId);
+          }
         }
       }
     }
@@ -132,22 +139,34 @@ export class RoomManager {
 
     room.participants.set(socketId, userId);
 
-    // Save to DB
-    try {
-      await prisma.participant.upsert({
-        where: { userId_roomId: { userId, roomId } },
-        update: { joinedAt: new Date() },
-        create: { userId, roomId },
-      });
-
-      // Track historical visit
-      await prisma.roomHistoryEntry.upsert({
-        where: { userId_roomId: { userId, roomId } },
-        update: { visitedAt: new Date() },
-        create: { userId, roomId },
-      });
-    } catch (err) {
-      console.error("Error saving participant or history entry:", err);
+    // Synchronize to PostgreSQL: Ensure Room.isActive is true and participant is recorded
+    let joinAttempts = 0;
+    while (joinAttempts < 3) {
+      try {
+        await prisma.$transaction([
+          prisma.room.update({
+            where: { id: roomId },
+            data: { isActive: true },
+          }),
+          prisma.participant.upsert({
+            where: { userId_roomId: { userId, roomId } },
+            update: { joinedAt: new Date() },
+            create: { userId, roomId },
+          }),
+          prisma.roomHistoryEntry.upsert({
+            where: { userId_roomId: { userId, roomId } },
+            update: { visitedAt: new Date() },
+            create: { userId, roomId },
+          }),
+        ]);
+        break;
+      } catch (err) {
+        joinAttempts++;
+        console.error(`Error updating room active state, participant, or history in DB (attempt ${joinAttempts}/3):`, err);
+        if (joinAttempts < 3) {
+          await new Promise((r) => setTimeout(r, 400 * joinAttempts));
+        }
+      }
     }
 
     return true;
@@ -158,6 +177,7 @@ export class RoomManager {
       if (room.participants.has(socketId)) {
         const userId = room.participants.get(socketId)!;
         room.participants.delete(socketId);
+        room.participantStatuses.delete(socketId);
 
         // If the user still has another active socket in the room, do not schedule removal
         const hasOtherActiveSocket = Array.from(room.participants.values()).includes(userId);
@@ -165,11 +185,14 @@ export class RoomManager {
           return;
         }
 
-        // Schedule permanent removal
+        // Schedule permanent removal after reconnection grace period
         const timeout = setTimeout(async () => {
-          room.disconnectedParticipants.delete(socketId);
-          await this.permanentlyRemoveUser(roomId, userId, socketId);
-        }, 10000); // 10 seconds reconnect window
+          if (room.disconnectedParticipants.get(socketId)?.timeout === timeout) {
+            room.disconnectedParticipants.delete(socketId);
+            await this.permanentlyRemoveUser(roomId, userId, socketId);
+            await this.checkAndDeactivateIfEmpty(roomId);
+          }
+        }, this.gracePeriodMs);
 
         room.disconnectedParticipants.set(socketId, { userId, timeout });
         this.io.to(roomId).emit("user_disconnected_temp", { socketId, userId });
@@ -189,7 +212,9 @@ export class RoomManager {
     }
 
     room.participants.delete(socketId);
+    room.participantStatuses.delete(socketId);
     await this.permanentlyRemoveUser(roomId, userId, socketId);
+    await this.checkAndDeactivateIfEmpty(roomId);
   }
 
   private async permanentlyRemoveUser(roomId: string, userId: string, oldSocketId: string) {
@@ -198,20 +223,97 @@ export class RoomManager {
 
     room.participantStatuses.delete(oldSocketId);
 
+    // If the user has reconnected and has an active socket in the room, do not remove them
+    const isStillActive = Array.from(room.participants.values()).includes(userId);
+    if (isStillActive) {
+      return;
+    }
+
     // Notify room
     this.io.to(roomId).emit("user_left", { userId, socketId: oldSocketId });
 
-    try {
-      await prisma.participant.delete({
-        where: { userId_roomId: { userId, roomId } },
-      });
-    } catch (err) {
-      console.error("Failed to delete participant", err);
+    let removeAttempts = 0;
+    while (removeAttempts < 3) {
+      try {
+        await prisma.participant.deleteMany({
+          where: { userId, roomId },
+        });
+        break;
+      } catch (err) {
+        removeAttempts++;
+        console.error(`Failed to delete participant from DB (attempt ${removeAttempts}/3):`, err);
+        if (removeAttempts < 3) {
+          await new Promise((r) => setTimeout(r, 400 * removeAttempts));
+        }
+      }
     }
 
     // Host migration if host left and didn't reconnect
     if (room.hostId === userId) {
-      this.migrateHost(roomId);
+      await this.migrateHost(roomId);
+    }
+  }
+
+  public async checkAndDeactivateIfEmpty(roomId: string): Promise<boolean> {
+    const room = this.rooms.get(roomId);
+    if (!room) return true;
+
+    const hasActive = room.participants.size > 0;
+    const hasDisconnected = room.disconnectedParticipants.size > 0;
+
+    if (!hasActive && !hasDisconnected) {
+      let attempts = 0;
+      while (attempts < 3) {
+        try {
+          await Promise.all([
+            prisma.room.update({
+              where: { id: roomId },
+              data: {
+                isActive: false,
+                playbackUrl: room.playback.url,
+                playbackTime: room.playback.time,
+              },
+            }),
+            prisma.participant.deleteMany({
+              where: { roomId },
+            }),
+          ]);
+          this.rooms.delete(roomId);
+          return true;
+        } catch (err) {
+          attempts++;
+          console.error(`Failed to deactivate empty room in DB (attempt ${attempts}/3):`, err);
+          if (attempts < 3) {
+            await new Promise((r) => setTimeout(r, 400 * attempts));
+          }
+        }
+      }
+      this.rooms.delete(roomId);
+      return true;
+    }
+    return false;
+  }
+
+  public async forceEndRoom(roomId: string) {
+    const room = this.rooms.get(roomId);
+    if (room) {
+      for (const [, data] of room.disconnectedParticipants.entries()) {
+        clearTimeout(data.timeout);
+      }
+      room.disconnectedParticipants.clear();
+      this.io.to(roomId).emit("room_ended", { roomId });
+      this.rooms.delete(roomId);
+    }
+    try {
+      await prisma.room.update({
+        where: { id: roomId },
+        data: { isActive: false },
+      });
+      await prisma.participant.deleteMany({
+        where: { roomId },
+      });
+    } catch (err) {
+      console.error("Failed to force end room in DB:", err);
     }
   }
 
@@ -272,20 +374,6 @@ export class RoomManager {
       }
 
       this.io.to(roomId).emit("new_host", { userId: newHostId });
-    } else {
-      // Room empty, clean up in-memory state and save playback state
-      try {
-        await prisma.room.update({
-          where: { id: roomId },
-          data: {
-            playbackUrl: room.playback.url,
-            playbackTime: room.playback.time,
-          },
-        });
-      } catch (err) {
-        console.error("Failed to save playback state", err);
-      }
-      this.rooms.delete(roomId);
     }
   }
 
