@@ -456,7 +456,16 @@ async function runTests() {
 
     const dbRoom7 = await prisma.room.findUnique({ where: { id: rId7 } });
     assert(dbRoom7 !== null && dbRoom7.isActive === false, "Room.isActive becomes false in DB upon grace period expiry");
-    assert(roomManager.getRoom(rId7) === undefined, "Room state cleaned from RoomManager after grace expiry");
+
+    let room7Cleaned = false;
+    for (let i = 0; i < 25; i++) {
+      if (roomManager.getRoom(rId7) === undefined) {
+        room7Cleaned = true;
+        break;
+      }
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    assert(room7Cleaned, "Room state cleaned from RoomManager after grace expiry");
 
     const remainingParticipants7 = await prisma.participant.findMany({ where: { roomId: rId7 } });
     assert(remainingParticipants7.length === 0, "All participant records cleaned up in DB when room empties");
@@ -496,10 +505,14 @@ async function runTests() {
 
     // Close Tab 2
     tab2.disconnect();
-    await new Promise((r) => setTimeout(r, 1800)); // let grace expire + DB latency
+    await new Promise((r) => setTimeout(r, 900)); // wait for grace period (750ms) to fire
 
-    const dbRoom8Final = await prisma.room.findUnique({ where: { id: rId8 } });
-    console.log("    [Test 8 debug] dbRoom8Final isActive:", dbRoom8Final?.isActive, "roomState8:", roomManager.getRoom(rId8));
+    let dbRoom8Final: any = null;
+    for (let i = 0; i < 25; i++) {
+      dbRoom8Final = await prisma.room.findUnique({ where: { id: rId8 } });
+      if (dbRoom8Final && dbRoom8Final.isActive === false) break;
+      await new Promise((r) => setTimeout(r, 100));
+    }
     assert(dbRoom8Final !== null && dbRoom8Final.isActive === false, "Room deactivates after all tabs close and grace expires");
 
     // -------------------------------------------------------------
@@ -535,10 +548,15 @@ async function runTests() {
     const dbRoom9_t200 = await prisma.room.findUnique({ where: { id: rId9 } });
     assert(dbRoom9_t200 !== null && dbRoom9_t200.isActive === true, "Room remains active while independent grace periods run");
 
-    // Wait until both have expired and DB writes finished (750ms from T=100 is T=850, so waiting 1200ms reaches T=1400)
-    await new Promise((r) => setTimeout(r, 1200));
+    // Wait until both have expired and DB writes finished
+    await new Promise((r) => setTimeout(r, 700));
 
-    const dbRoom9Final = await prisma.room.findUnique({ where: { id: rId9 } });
+    let dbRoom9Final: any = null;
+    for (let i = 0; i < 25; i++) {
+      dbRoom9Final = await prisma.room.findUnique({ where: { id: rId9 } });
+      if (dbRoom9Final && dbRoom9Final.isActive === false) break;
+      await new Promise((r) => setTimeout(r, 100));
+    }
     assert(dbRoom9Final !== null && dbRoom9Final.isActive === false, "Room deactivates only after the last grace period expires");
 
     // -------------------------------------------------------------

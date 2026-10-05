@@ -4,6 +4,7 @@ import { Rnd } from "react-rnd";
 
 import { useAudioStore } from "../store/useAudioStore";
 import { useSocketStore } from "../store/useSocketStore";
+import { isScreenShareSupported } from "../hooks/useWebRTC";
 
 interface VideoPlayerProps {
   stream: MediaStream;
@@ -106,6 +107,14 @@ function StreamPlayer({
           You
         </div>
       )}
+      {/* Who is this? (Camera-off tiles already say it in the middle.) */}
+      {!isLocal && isCamOn && name && !isCircle && (
+        <div
+          className={`absolute bottom-2 ${isMicOn ? "left-2" : "left-9"} z-20 max-w-[70%] truncate rounded-md bg-black/60 px-2 py-0.5 text-xs font-medium text-white backdrop-blur`}
+        >
+          {name}
+        </div>
+      )}
     </div>
   );
 }
@@ -144,6 +153,7 @@ export default function VideoGrid({ localStream, screenStream, peers, peerStatus
   
   const { activeSpeakers } = useAudioStore();
   const { socket } = useSocketStore();
+  const participants = useSocketStore((s) => s.participants);
 
   const handleToggleAudio = () => {
     toggleAudio();
@@ -173,6 +183,7 @@ export default function VideoGrid({ localStream, screenStream, peers, peerStatus
       <button onClick={() => setIsCircle(!isCircle)} className="p-2 rounded-lg transition-colors bg-slate-800/80 hover:bg-slate-700 text-white shadow" title="Toggle Camera Shape">
         {isCircle ? <Square size={16} /> : <Circle size={16} />}
       </button>
+      {isScreenShareSupported() && (
       <button 
         onClick={shareScreen} 
         className={`p-2 rounded-lg transition-colors shadow ${isSharingScreen ? 'bg-red-500/80 text-white border border-red-400' : 'bg-slate-800/80 hover:bg-slate-700 text-white'}`} 
@@ -180,6 +191,7 @@ export default function VideoGrid({ localStream, screenStream, peers, peerStatus
       >
         <MonitorUp size={16} />
       </button>
+      )}
       {toggleFullscreen && (
         <button onClick={toggleFullscreen} className="p-2 rounded-lg transition-colors bg-slate-800/80 hover:bg-slate-700 text-white shadow" title="Toggle Fullscreen">
           {isFullscreen ? <Minimize size={16} /> : <Maximize size={16} />}
@@ -258,7 +270,7 @@ export default function VideoGrid({ localStream, screenStream, peers, peerStatus
         isMicOn:
           peerStatuses[p.socketId]?.mic ??
           p.stream.getAudioTracks().some((t) => t.enabled && t.readyState === "live"),
-        name: `Participant ${p.socketId.slice(0, 4)}`,
+        name: participants[p.socketId]?.userName ?? `Participant ${p.socketId.slice(0, 4)}`,
       })),
   ];
 
@@ -345,7 +357,7 @@ export default function VideoGrid({ localStream, screenStream, peers, peerStatus
               <div key={s.id} className="flex items-center justify-between p-3 bg-slate-800/30 border border-slate-800 rounded-lg hover:bg-slate-800/80 transition-colors">
                 <div className="flex items-center gap-3">
                   <div className={`w-2 h-2 rounded-full shadow-[0_0_8px_rgba(0,0,0,0.5)] ${s.isActive ? 'bg-green-500 animate-pulse shadow-green-500/50' : 'bg-slate-600'}`} />
-                  <span className="text-slate-200 font-medium text-sm">{s.isLocal ? (s.id === 'screen' ? 'Your Screen' : 'You') : `Participant ${s.id.slice(0,4)}`}</span>
+                  <span className="text-slate-200 font-medium text-sm">{s.isLocal ? (s.id === 'screen' ? 'Your Screen' : 'You') : s.name}</span>
                 </div>
                 <div className="flex items-center gap-3 text-slate-400">
                   {s.isMicOn ? <Mic size={16} className="text-slate-300" /> : <MicOff size={16} className="text-red-400" />}
