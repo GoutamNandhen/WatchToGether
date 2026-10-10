@@ -133,6 +133,42 @@ export default function Room() {
     };
   }, []);
 
+  useEffect(() => {
+    if (!import.meta.env.DEV || !isFullscreen) return;
+    const stage = videoContainerRef.current;
+    if (!stage) return;
+
+    const report = (reason: string) => {
+      const media = stage.querySelector('video, iframe');
+      const stageRect = stage.getBoundingClientRect();
+      const mediaRect = media?.getBoundingClientRect();
+      const streamAvailable = mainScreenSource === 'url' || [
+        screenStreamState,
+        ...Object.values(screenShares).filter((share): share is MediaStream => typeof share !== 'string'),
+      ].some((stream) => stream?.id === mainScreenSource);
+      console.debug('[Room fullscreen]', {
+        reason,
+        fullscreenElement: (document.fullscreenElement ||
+          (document as Document & { webkitFullscreenElement?: Element }).webkitFullscreenElement)?.tagName ?? null,
+        source: mainScreenSource === 'url' ? 'url' : 'stream',
+        streamAvailable,
+        stage: { width: stageRect.width, height: stageRect.height },
+        media: mediaRect ? { width: mediaRect.width, height: mediaRect.height } : null,
+        video: media instanceof HTMLVideoElement
+          ? { width: media.videoWidth, height: media.videoHeight }
+          : null,
+      });
+    };
+
+    report('source or fullscreen state');
+    if (typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(() => report('stage or media resize'));
+    observer.observe(stage);
+    const media = stage.querySelector('video, iframe');
+    if (media) observer.observe(media);
+    return () => observer.disconnect();
+  }, [isFullscreen, mainScreenSource, screenStreamState, screenShares]);
+
   const handleMouseLeaveBottom = () => setHoverZones(p => ({ ...p, bottom: false }));
   const handleMouseEnterBottom = () => setHoverZones(p => ({ ...p, bottom: true }));
 
@@ -318,7 +354,9 @@ export default function Room() {
 
   // When native fullscreen exits, apply any deferred/pending mainScreenSource promotion
   useEffect(() => {
-    if (!isFullscreen && pendingMainScreenSourceRef.current !== null) {
+    const nativeFullscreen = document.fullscreenElement ||
+      (document as Document & { webkitFullscreenElement?: Element }).webkitFullscreenElement;
+    if (!isFullscreen && !nativeFullscreen && pendingMainScreenSourceRef.current !== null) {
       const pending = pendingMainScreenSourceRef.current;
       pendingMainScreenSourceRef.current = null;
 
@@ -478,8 +516,13 @@ export default function Room() {
     <select
       value={mainScreenSource}
       onChange={(e) => {
-        pendingMainScreenSourceRef.current = null;
-        setMainScreenSource(e.target.value);
+        const nextSource = e.target.value;
+        if (document.fullscreenElement || (document as Document & { webkitFullscreenElement?: Element }).webkitFullscreenElement) {
+          pendingMainScreenSourceRef.current = nextSource;
+        } else {
+          pendingMainScreenSourceRef.current = null;
+          setMainScreenSource(nextSource);
+        }
       }}
       className="rounded-xl border border-white/10 bg-ink-900/80 px-3 py-2 text-sm font-medium text-white shadow-lg backdrop-blur-md focus:border-indigo-400/60 focus:outline-none"
       aria-label="Main screen source"
@@ -649,17 +692,6 @@ export default function Room() {
                 ...Object.values(screenShares).map((s) => (typeof s === "string" ? null : s)).filter((s): s is MediaStream => !!s),
               ].find(s => s && s.id === mainScreenSource);
 
-              if (!streamToRender) {
-                return id ? (
-                  <div 
-                    className={isFullscreen ? "w-[100vw] h-[100vh] max-w-none max-h-none flex-1 flex" : "w-full h-full flex-1 flex"}
-                    style={isFullscreen ? { width: '100vw', height: '100vh', maxWidth: 'none', maxHeight: 'none' } : undefined}
-                  >
-                    <VideoPlayer ref={videoPlayerRef} roomId={id} isFullscreen={isFullscreen} isHost={isHost} isRoomHost={isRoomHost} broadcastMediaStream={broadcastMediaStream} stopBroadcast={stopBroadcast} shareScreen={shareScreen} compact={isMobile} controlsSheetOpen={isHostControlsOpen} onControlsSheetClose={() => setIsHostControlsOpen(false)} />
-                  </div>
-                ) : null;
-              }
-
               return (
                 <div 
                   className={`w-full h-full flex items-center justify-center bg-black ${isFullscreen ? 'w-[100vw] h-[100vh] max-w-none max-h-none' : 'p-4'}`}
@@ -667,9 +699,11 @@ export default function Room() {
                 >
                   <video 
                     ref={el => { 
-                      if (el && streamToRender && el.srcObject !== streamToRender) {
-                        el.srcObject = streamToRender; 
-                        el.play().catch(err => console.warn("[Room] Captured stream playback notice:", err));
+                      if (el && el.srcObject !== streamToRender) {
+                        el.srcObject = streamToRender ?? null;
+                        if (streamToRender) {
+                          el.play().catch(err => console.warn("[Room] Captured stream playback notice:", err));
+                        }
                       }
                     }}
                     autoPlay 
