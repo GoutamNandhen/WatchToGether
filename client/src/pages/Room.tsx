@@ -52,7 +52,8 @@ export default function Room() {
   const [isChatOpen, setIsChatOpen] = useState(() => typeof window !== "undefined" && window.innerWidth >= 1280);
   const [passwordPrompt, setPasswordPrompt] = useState<{ open: boolean; error: string | null }>({ open: false, error: null });
   const [codeCopied, setCodeCopied] = useState(false);
-  const mediaStartedRef = useRef(false);
+  const joinMediaPromiseRef = useRef<Promise<MediaStream | null> | null>(null);
+  const joinAttemptRef = useRef(0);
   const [hoverZones, setHoverZones] = useState({ top: false, right: false, bottom: false });
   const [isCameraSidebarOpen, setIsCameraSidebarOpen] = useState(true);
   const [isFullscreen, setIsFullscreen] = useState(false);
@@ -175,15 +176,19 @@ export default function Room() {
   // Joining needs the camera/mic first so peers can negotiate immediately.
   const startJoin = useCallback((password?: string) => {
     if (!id || !user) return;
+    const attempt = ++joinAttemptRef.current;
     connect();
-    if (mediaStartedRef.current) {
-      joinRoom(id, user.id, user.name, password);
-      return;
-    }
-    mediaStartedRef.current = true;
+    const mediaReady = joinMediaPromiseRef.current ??= getLocalStream();
     // Fetch TURN credentials alongside media so the first peer connections can use them.
-    Promise.all([getLocalStream(), loadIceServers()]).then(() => {
+    Promise.all([mediaReady, loadIceServers()]).then(([stream]) => {
+      if (!stream) {
+        if (joinMediaPromiseRef.current === mediaReady) joinMediaPromiseRef.current = null;
+        return;
+      }
+      if (attempt !== joinAttemptRef.current) return;
       joinRoom(id, user.id, user.name, password);
+    }).catch((err) => {
+      if (attempt === joinAttemptRef.current) console.error("Failed to prepare room media", err);
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, user?.id, user?.name, connect, joinRoom]);
@@ -223,6 +228,8 @@ export default function Room() {
 
     return () => {
       cancelled = true;
+      joinAttemptRef.current++;
+      joinMediaPromiseRef.current = null;
       if (id && user) {
         leaveRoom(id, user.id, user.name);
       }
@@ -312,6 +319,7 @@ export default function Room() {
   // If native fullscreen is currently active, defer promoting/replacing the main-stage
   // renderer until fullscreen exits to prevent disruptive DOM unmounting that drops fullscreen.
   const prevRemoteStreamIdsRef = useRef<string[]>([]);
+  const prevLocalStreamIdRef = useRef<string | null>(null);
   const pendingMainScreenSourceRef = useRef<string | null>(null);
 
   useEffect(() => {
@@ -324,17 +332,20 @@ export default function Room() {
 
     // Detect if a new remote broadcast stream arrived
     const newlyArrivedStream = activeRemoteStreams.find((s) => !prevStreamIds.includes(s.id));
+    const newlyArrivedLocalStream = screenStreamState && screenStreamState.id !== prevLocalStreamIdRef.current
+      ? screenStreamState : null;
 
     const isFs = isFullscreen || !!(
       document.fullscreenElement ||
       (document as Document & { webkitFullscreenElement?: Element }).webkitFullscreenElement
     );
 
-    if (newlyArrivedStream) {
+    if (newlyArrivedStream || newlyArrivedLocalStream) {
+      const nextStreamId = (newlyArrivedStream || newlyArrivedLocalStream)!.id;
       if (isFs) {
-        pendingMainScreenSourceRef.current = newlyArrivedStream.id;
+        pendingMainScreenSourceRef.current = nextStreamId;
       } else {
-        setMainScreenSource(newlyArrivedStream.id);
+        setMainScreenSource(nextStreamId);
       }
     } else if (mainScreenSource !== 'url') {
       const isLocalActive = screenStreamState && screenStreamState.id === mainScreenSource;
@@ -350,6 +361,7 @@ export default function Room() {
     }
 
     prevRemoteStreamIdsRef.current = activeRemoteStreamIds;
+    prevLocalStreamIdRef.current = screenStreamState?.id ?? null;
   }, [screenShares, screenStreamState, mainScreenSource, isFullscreen]);
 
   // When native fullscreen exits, apply any deferred/pending mainScreenSource promotion
@@ -444,46 +456,21 @@ export default function Room() {
   useEffect(() => {
     if (!socket) return;
 
-    const isNativeFullscreen = () => !!(
-      document.fullscreenElement ||
-      (document as Document & { webkitFullscreenElement?: Element }).webkitFullscreenElement
-    );
-
     const handleUserSpeaking = ({ socketId }: { socketId: string }) => addActiveSpeaker(socketId);
     const handleUserStoppedSpeaking = ({ socketId }: { socketId: string }) => removeActiveSpeaker(socketId);
     const handleAnnouncementStart = () => setHostAnnouncement(true);
     const handleAnnouncementStop = () => setHostAnnouncement(false);
 
-    const handleScreenShareStart = ({ streamId }: { streamId: string }) => {
-      if (isNativeFullscreen()) {
-        pendingMainScreenSourceRef.current = streamId;
-      } else {
-        setMainScreenSource(streamId);
-      }
-    };
-
-    const handleScreenShareStop = () => {
-      if (isNativeFullscreen()) {
-        pendingMainScreenSourceRef.current = 'url';
-      } else {
-        setMainScreenSource('url');
-      }
-    };
-
     socket.on("user_speaking", handleUserSpeaking);
     socket.on("user_stopped_speaking", handleUserStoppedSpeaking);
     socket.on("host_announcement_start", handleAnnouncementStart);
     socket.on("host_announcement_stop", handleAnnouncementStop);
-    socket.on("screen_share_start", handleScreenShareStart);
-    socket.on("screen_share_stop", handleScreenShareStop);
 
     return () => {
       socket.off("user_speaking", handleUserSpeaking);
       socket.off("user_stopped_speaking", handleUserStoppedSpeaking);
       socket.off("host_announcement_start", handleAnnouncementStart);
       socket.off("host_announcement_stop", handleAnnouncementStop);
-      socket.off("screen_share_start", handleScreenShareStart);
-      socket.off("screen_share_stop", handleScreenShareStop);
     };
   }, [socket, addActiveSpeaker, removeActiveSpeaker, setHostAnnouncement]);
 

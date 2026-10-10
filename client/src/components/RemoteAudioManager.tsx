@@ -36,11 +36,12 @@ export function RemoteAudioSink({
   useEffect(() => {
     const audioEl = audioRef.current;
     if (!audioEl || !stream) return;
+    let active = true;
 
     registerAudioElement(peerSocketId, audioEl);
 
     const playAudio = () => {
-      if (!audioEl) return;
+      if (stream.getAudioTracks().length === 0) return;
       if (audioEl.srcObject !== stream) {
         audioEl.srcObject = stream;
       }
@@ -51,9 +52,10 @@ export function RemoteAudioSink({
       if (playPromise !== undefined) {
         playPromise
           .then(() => {
-            onPlaybackSuccess(peerSocketId);
+            if (active) onPlaybackSuccess(peerSocketId);
           })
           .catch((err: Error) => {
+            if (!active || stream.getAudioTracks().length === 0) return;
             if (
               err.name === "NotAllowedError" ||
               err.name === "AbortError" ||
@@ -77,11 +79,20 @@ export function RemoteAudioSink({
         playAudio();
       }
     };
+    const onTrackRemoved = (e: MediaStreamTrackEvent) => {
+      if (e.track.kind === "audio" && stream.getAudioTracks().length === 0) {
+        audioEl.pause();
+        onPlaybackSuccess(peerSocketId);
+      }
+    };
 
     stream.addEventListener("addtrack", onTrackAdded);
+    stream.addEventListener("removetrack", onTrackRemoved);
 
     return () => {
+      active = false;
       stream.removeEventListener("addtrack", onTrackAdded);
+      stream.removeEventListener("removetrack", onTrackRemoved);
       unregisterAudioElement(peerSocketId);
       if (audioEl) {
         audioEl.pause();

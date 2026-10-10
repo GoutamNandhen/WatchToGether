@@ -21,7 +21,7 @@ interface VideoPlayerProps {
   isHost: boolean;
   /** The single room host, whose player is the room's clock. */
   isRoomHost?: boolean;
-  broadcastMediaStream?: (stream: MediaStream) => void;
+  broadcastMediaStream?: (stream: MediaStream, promoteLocally?: boolean) => void;
   stopBroadcast?: () => void;
   shareScreen?: () => void;
   /** Phone layout: edge-to-edge, host controls in a sheet instead of a hover panel. */
@@ -43,6 +43,11 @@ const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(({ roomId, isFu
   const [playbackRate, setPlaybackRate] = useState(1.0);
   
   const playerRef = useRef<ReactPlayer>(null);
+  const localFileUrlRef = useRef<string | null>(null);
+  const fileCaptureTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const capturedFileStreamRef = useRef<MediaStream | null>(null);
+  const stopBroadcastRef = useRef(stopBroadcast);
+  stopBroadcastRef.current = stopBroadcast;
   const isHandlingRemote = useRef(false);
   const isHostRef = useRef(isHost);
   isHostRef.current = isHost;
@@ -50,62 +55,26 @@ const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(({ roomId, isFu
   isRoomHostRef.current = isRoomHost;
   // The host applies the server's saved state once when (re)joining, then acts as the clock.
   const hostInitializedRef = useRef(false);
-  const isFullscreenRef = useRef(isFullscreen);
-  isFullscreenRef.current = isFullscreen;
   const urlRef = useRef(url);
   urlRef.current = url;
-  const pendingUrlRef = useRef<string | null>(null);
   const remoteHandlingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const checkIsFullscreen = () => {
-    return isFullscreenRef.current || !!(
-      typeof document !== 'undefined' && (
-        document.fullscreenElement ||
-        (document as Document & { webkitFullscreenElement?: Element }).webkitFullscreenElement
-      )
-    );
-  };
-
-  // When native fullscreen exits, apply any deferred URL change and resync with host
-  useEffect(() => {
-    if (!isFullscreen && pendingUrlRef.current !== null) {
-      const nextUrl = pendingUrlRef.current;
-      pendingUrlRef.current = null;
-      if (nextUrl !== urlRef.current) {
-        setUrl(nextUrl);
-        setPlaying(true);
-        if (!isHostRef.current && socket) {
-          socket.emit("request_sync", { roomId });
-        }
-      }
+  const releaseLocalFile = useCallback((stopCapture: boolean) => {
+    if (fileCaptureTimerRef.current) clearTimeout(fileCaptureTimerRef.current);
+    fileCaptureTimerRef.current = null;
+    if (stopCapture && capturedFileStreamRef.current?.getVideoTracks().some((track) => track.readyState === 'live')) {
+      stopBroadcastRef.current?.();
     }
-  }, [isFullscreen, socket, roomId]);
+    capturedFileStreamRef.current = null;
+    if (localFileUrlRef.current) URL.revokeObjectURL(localFileUrlRef.current);
+    localFileUrlRef.current = null;
+  }, []);
 
   useEffect(() => {
-    const handleNativeFsExit = () => {
-      const isFs = !!(
-        document.fullscreenElement ||
-        (document as Document & { webkitFullscreenElement?: Element }).webkitFullscreenElement
-      );
-      if (!isFs && pendingUrlRef.current !== null) {
-        const nextUrl = pendingUrlRef.current;
-        pendingUrlRef.current = null;
-        if (nextUrl !== urlRef.current) {
-          setUrl(nextUrl);
-          setPlaying(true);
-          if (!isHostRef.current && socket) {
-            socket.emit("request_sync", { roomId });
-          }
-        }
-      }
-    };
-    document.addEventListener("fullscreenchange", handleNativeFsExit);
-    document.addEventListener("webkitfullscreenchange", handleNativeFsExit);
-    return () => {
-      document.removeEventListener("fullscreenchange", handleNativeFsExit);
-      document.removeEventListener("webkitfullscreenchange", handleNativeFsExit);
-    };
-  }, [socket, roomId]);
+    if (localFileUrlRef.current && url !== localFileUrlRef.current) releaseLocalFile(true);
+  }, [url, releaseLocalFile]);
+
+  useEffect(() => () => releaseLocalFile(false), [releaseLocalFile]);
 
   const markHandlingRemote = (duration = 800) => {
     if (remoteHandlingTimerRef.current) {
@@ -259,7 +228,6 @@ const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(({ roomId, isFu
     if (!socket) return;
 
     const handlePlayVideo = ({ time, serverTime }: { time: number; serverTime?: number }) => {
-      if (pendingUrlRef.current && pendingUrlRef.current !== urlRef.current) return;
       markHandlingRemote(800);
       lastSyncStateRef.current = {
         time,
@@ -279,7 +247,6 @@ const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(({ roomId, isFu
     };
 
     const handlePauseVideo = ({ time, serverTime }: { time: number; serverTime?: number }) => {
-      if (pendingUrlRef.current && pendingUrlRef.current !== urlRef.current) return;
       markHandlingRemote(800);
       lastSyncStateRef.current = {
         time,
@@ -296,7 +263,6 @@ const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(({ roomId, isFu
     };
 
     const handleSeekVideo = ({ time, serverTime }: { time: number; serverTime?: number }) => {
-      if (pendingUrlRef.current && pendingUrlRef.current !== urlRef.current) return;
       markHandlingRemote(800);
       if (lastSyncStateRef.current) {
         lastSyncStateRef.current.time = time;
@@ -310,11 +276,7 @@ const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(({ roomId, isFu
     };
 
     const handleChangeVideo = ({ url: newUrl }: { url: string }) => {
-      if (checkIsFullscreen() && newUrl !== urlRef.current) {
-        pendingUrlRef.current = newUrl;
-        return;
-      }
-      pendingUrlRef.current = null;
+      markHandlingRemote(800);
       setUrl(newUrl);
       setPlaying(!!newUrl);
       if (playerRef.current) {
@@ -332,30 +294,21 @@ const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(({ roomId, isFu
 
       const { time, playing: hostPlaying, url: hostUrl, lastUpdatedAt, serverTime } = playbackState;
       markHandlingRemote(800);
+      const sourceChanged = hostUrl !== urlRef.current;
+      if (sourceChanged) setUrl(hostUrl);
+      setPlaying(hostPlaying);
 
-      if (hostUrl && hostUrl !== urlRef.current) {
-        if (checkIsFullscreen()) {
-          pendingUrlRef.current = hostUrl;
-        } else {
-          pendingUrlRef.current = null;
-          setUrl(hostUrl);
-        }
-      } else if (hostUrl === urlRef.current) {
-        pendingUrlRef.current = null;
-      }
+      const now = Date.now();
+      lastSyncStateRef.current = {
+        time,
+        playing: hostPlaying,
+        lastUpdatedAt: lastUpdatedAt || now,
+        localReceiptTime: now,
+        serverTime: serverTime || now,
+      };
 
-      if (!pendingUrlRef.current || pendingUrlRef.current === urlRef.current) {
-        setPlaying(hostPlaying);
-
-        const now = Date.now();
-        lastSyncStateRef.current = {
-          time,
-          playing: hostPlaying,
-          lastUpdatedAt: lastUpdatedAt || now,
-          localReceiptTime: now,
-          serverTime: serverTime || now,
-        };
-
+      // A changed URL mounts a new player; seek only once that player is ready.
+      if (!sourceChanged) {
         const expectedTime = calculateExpectedTime(lastSyncStateRef.current);
         applyDriftCorrection(expectedTime, hostPlaying);
       }
@@ -483,6 +436,7 @@ const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(({ roomId, isFu
   ) : null;
 
   const handlePlay = () => {
+    if (localFileUrlRef.current === urlRef.current && !capturedFileStreamRef.current) return;
     if (isHandlingRemote.current) return;
     if (!isHost) {
       // Starting playback is fine if the room is playing (e.g. after an autoplay block).
@@ -551,7 +505,6 @@ const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(({ roomId, isFu
       if (!/^https?:\/\//i.test(finalUrl)) {
         finalUrl = 'https://' + finalUrl;
       }
-      pendingUrlRef.current = null;
       setUrl(finalUrl);
       setPlaying(true);
       setVideoError(false);
@@ -571,7 +524,6 @@ const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(({ roomId, isFu
   const handleStopMedia = () => {
     // A local file is shared as a captured stream; stop that broadcast too.
     stopBroadcast?.();
-    pendingUrlRef.current = null;
     setUrl("");
     setPlaying(false);
     socket?.emit("change_video", { roomId, url: "" });
@@ -583,29 +535,46 @@ const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(({ roomId, isFu
 
   const handleLocalFile = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
+    e.target.value = "";
     if (!file) return;
-    
+    if (!broadcastMediaStream) {
+      toast.error("Local video sharing is unavailable in this room");
+      return;
+    }
+
+    releaseLocalFile(true);
     const fileUrl = URL.createObjectURL(file);
-    pendingUrlRef.current = null;
+    localFileUrlRef.current = fileUrl;
     setUrl(fileUrl);
     setPlaying(true);
     setVideoError(false);
-    
+
     // We do not broadcast the blob URL because peers cannot access it.
-    // Instead, we will capture the stream once it starts playing and broadcast it.
-    socket?.emit("play_video", { roomId, time: 0 });
-    
-    // Attempt to capture stream after a short delay to ensure video element is mounted and playing
-    setTimeout(() => {
-      if (playerRef.current && broadcastMediaStream) {
-        const videoEl = playerRef.current.getInternalPlayer() as HTMLVideoElement;
-        if (videoEl && typeof (videoEl as HTMLVideoElement & { captureStream?: () => MediaStream }).captureStream === 'function') {
-          const stream = (videoEl as HTMLVideoElement & { captureStream: () => MediaStream }).captureStream();
-          broadcastMediaStream(stream);
-        } else if (videoEl && typeof (videoEl as HTMLVideoElement & { mozCaptureStream?: () => MediaStream }).mozCaptureStream === 'function') {
-          const stream = (videoEl as HTMLVideoElement & { mozCaptureStream: () => MediaStream }).mozCaptureStream();
-          broadcastMediaStream(stream);
+    // Capture only the currently selected file, and never announce playback if capture failed.
+    fileCaptureTimerRef.current = setTimeout(() => {
+      fileCaptureTimerRef.current = null;
+      if (localFileUrlRef.current !== fileUrl || urlRef.current !== fileUrl) return;
+      const videoEl = playerRef.current?.getInternalPlayer() as (HTMLVideoElement & {
+        captureStream?: () => MediaStream;
+        mozCaptureStream?: () => MediaStream;
+      }) | undefined;
+      try {
+        const capture = videoEl?.captureStream ?? videoEl?.mozCaptureStream;
+        if (!videoEl || !capture) throw new Error("captureStream is unavailable");
+        const stream = capture.call(videoEl);
+        if (!stream.getVideoTracks().some((track) => track.readyState === 'live')) {
+          stream.getTracks().forEach((track) => track.stop());
+          throw new Error("No live video track was captured");
         }
+        capturedFileStreamRef.current = stream;
+        // Keep this player mounted: removing its video element ends the captured stream.
+        broadcastMediaStream(stream, false);
+        socket?.emit("play_video", { roomId, time: 0 });
+      } catch (err) {
+        console.warn("Local video capture failed:", err);
+        toast.error("This browser couldn't share the selected local video");
+        setPlaying(false);
+        setUrl("");
       }
     }, 1000);
   };
@@ -760,6 +729,9 @@ const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(({ roomId, isFu
             onEnded={handleEnded}
             onBuffer={handleBuffer}
             onBufferEnd={handleBufferEnd}
+            onReady={() => {
+              if (!isRoomHostRef.current) socket?.emit("request_sync", { roomId });
+            }}
             controls={true}
             config={{ youtube: { playerVars: { fs: 0 } } }}
             style={{ position: "absolute", top: 0, left: 0 }}
