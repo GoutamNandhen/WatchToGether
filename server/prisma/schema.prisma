@@ -47,6 +47,7 @@ model Room {
   maxParticipants Int           @default(10)
   hostId          String
   isActive        Boolean       @default(true)
+  endedAt         DateTime?
   host            User          @relation("HostRooms", fields: [hostId], references: [id])
   createdAt       DateTime      @default(now())
   

@@ -302,8 +302,8 @@ async function runTests() {
     assert(clientC.isHost === false, "User C client isHost flag remains false");
 
     // Verify broadcast event was received by both
-    assert(clientB.hostChangedEvents.length > 0, "User B received host_changed socket event");
-    assert(clientC.hostChangedEvents.length > 0, "User C received host_changed socket event");
+    assert(clientB.newHostEvents.length > 0, "User B received new_host socket event");
+    assert(clientC.newHostEvents.length > 0, "User C received new_host socket event");
 
     // -------------------------------------------------------------
     // Scenario 6 & 7: Host disconnects temporarily; grace period respected; host reconnects

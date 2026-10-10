@@ -135,7 +135,7 @@ export class RoomManager {
           },
         });
 
-        if (!dbRoom) return null;
+        if (!dbRoom || dbRoom.endedAt) return null;
 
         if (this.rooms.has(roomId)) {
           return this.rooms.get(roomId)!;
@@ -214,9 +214,44 @@ export class RoomManager {
     return room.hostId === userId || room.coHosts.has(userId);
   }
 
+  private async persistJoin(roomId: string, userId: string): Promise<void> {
+    await prisma.$transaction(async (tx) => {
+      // The conditional update serializes joins against an explicit room end.
+      const active = await tx.room.updateMany({
+        where: { id: roomId, endedAt: null },
+        data: { isActive: true },
+      });
+      if (active.count !== 1) throw new Error("Room ended or no longer exists");
+      await tx.participant.upsert({
+        where: { userId_roomId: { userId, roomId } },
+        update: { joinedAt: new Date() },
+        create: { userId, roomId },
+      });
+      await tx.roomHistoryEntry.upsert({
+        where: { userId_roomId: { userId, roomId } },
+        update: { visitedAt: new Date() },
+        create: { userId, roomId },
+      });
+    });
+  }
+
   public async handleJoin(roomId: string, socketId: string, userId: string, userName: string, avatarVersion: number | null = null) {
     const room = await this.getOrCreateRoom(roomId);
     if (!room) return false;
+
+    // Do not expose a successful live join until all required database state is durable.
+    let persisted = false;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        await this.persistJoin(roomId, userId);
+        persisted = true;
+        break;
+      } catch (err) {
+        console.error(`Error persisting room join (attempt ${attempt}/3):`, err);
+        if (attempt < 3) await new Promise((r) => setTimeout(r, 400 * attempt));
+      }
+    }
+    if (!persisted || this.rooms.get(roomId) !== room) return false;
 
     // Check if user was in disconnected state and cancel the pending timeout
     const staleSocketIds: string[] = [];
@@ -258,36 +293,6 @@ export class RoomManager {
     room.participants.set(socketId, userId);
     room.participantNames.set(socketId, userName);
     room.participantAvatars.set(socketId, avatarVersion);
-
-    // Synchronize to PostgreSQL: Ensure Room.isActive is true and participant is recorded
-    let joinAttempts = 0;
-    while (joinAttempts < 3) {
-      try {
-        await prisma.$transaction([
-          prisma.room.update({
-            where: { id: roomId },
-            data: { isActive: true },
-          }),
-          prisma.participant.upsert({
-            where: { userId_roomId: { userId, roomId } },
-            update: { joinedAt: new Date() },
-            create: { userId, roomId },
-          }),
-          prisma.roomHistoryEntry.upsert({
-            where: { userId_roomId: { userId, roomId } },
-            update: { visitedAt: new Date() },
-            create: { userId, roomId },
-          }),
-        ]);
-        break;
-      } catch (err) {
-        joinAttempts++;
-        console.error(`Error updating room active state, participant, or history in DB (attempt ${joinAttempts}/3):`, err);
-        if (joinAttempts < 3) {
-          await new Promise((r) => setTimeout(r, 400 * joinAttempts));
-        }
-      }
-    }
 
     return true;
   }
@@ -445,18 +450,14 @@ export class RoomManager {
   }
 
   public async forceEndRoom(roomId: string) {
-    this.evictRoom(roomId);
-    try {
-      await prisma.room.update({
+    await prisma.$transaction([
+      prisma.room.update({
         where: { id: roomId },
-        data: { isActive: false },
-      });
-      await prisma.participant.deleteMany({
-        where: { roomId },
-      });
-    } catch (err) {
-      console.error("Failed to force end room in DB:", err);
-    }
+        data: { isActive: false, endedAt: new Date() },
+      }),
+      prisma.participant.deleteMany({ where: { roomId } }),
+    ]);
+    this.evictRoom(roomId);
   }
 
   public async makeCoHost(roomId: string, targetUserId: string) {
@@ -543,13 +544,21 @@ export class RoomManager {
   public async kickUser(roomId: string, targetUserId: string) {
     const room = this.rooms.get(roomId);
     if (!room) return [];
+    const wasBanned = room.bannedUserIds.has(targetUserId);
     room.bannedUserIds.add(targetUserId);
+    try {
+      // The ban must be durable before the kicked user is notified or can call HTTP routes.
+      await prisma.roomBan.upsert({
+        where: { roomId_userId: { roomId, userId: targetUserId } },
+        update: {},
+        create: { roomId, userId: targetUserId },
+      });
+    } catch (err) {
+      if (!wasBanned) room.bannedUserIds.delete(targetUserId);
+      console.error("Failed to persist room ban", err);
+      return [];
+    }
     room.coHosts.delete(targetUserId);
-    persist(roomId, "room ban", () => prisma.roomBan.upsert({
-      where: { roomId_userId: { roomId, userId: targetUserId } },
-      update: {},
-      create: { roomId, userId: targetUserId },
-    }));
 
     const socketIds = Array.from(room.participants.entries())
       .filter(([, uid]) => uid === targetUserId)

@@ -7,7 +7,11 @@
     "dev": "nodemon src/index.ts",
     "build": "npx prisma generate && tsc",
     "start": "node dist/index.js",
-    "test": "ts-node src/tests/reconnection.test.ts"
+    "typecheck": "tsc --noEmit",
+    "test": "npm run test:unit && node scripts/run-tests.cjs",
+    "test:unit": "ts-node src/tests/pure_features.test.ts",
+    "test:integration": "node scripts/run-tests.cjs",
+    "test:multi": "node scripts/run-tests.cjs --multi"
   },
   "keywords": [],
   "author": "",

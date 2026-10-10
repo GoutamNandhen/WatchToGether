@@ -101,11 +101,16 @@ const notifyFriendsOfSchedule = async (req: AuthRequest, roomId: string, roomNam
   }
 };
 
-/** Host, co-host, or someone who has joined the room before. */
-const isRoomMember = async (roomId: string, userId: string, hostId: string) =>
-  hostId === userId ||
-  !!(await prisma.roomCoHost.findUnique({ where: { roomId_userId: { roomId, userId } } })) ||
-  !!(await prisma.roomHistoryEntry.findUnique({ where: { userId_roomId: { userId, roomId } } }));
+/** A ban revokes room privileges, including privileges earned on a previous visit. */
+const hasRoomPermission = async (roomId: string, userId: string, hostId: string, allowHistory: boolean) => {
+  if (await prisma.roomBan.findUnique({ where: { roomId_userId: { roomId, userId } } })) return false;
+  if (hostId === userId) return true;
+  if (await prisma.roomCoHost.findUnique({ where: { roomId_userId: { roomId, userId } } })) return true;
+  if (allowHistory) {
+    return !!(await prisma.roomHistoryEntry.findUnique({ where: { userId_roomId: { userId, roomId } } }));
+  }
+  return !!(await prisma.participant.findUnique({ where: { userId_roomId: { userId, roomId } } }));
+};
 
 export const createRoom = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
@@ -265,7 +270,7 @@ export const inviteRoom = async (req: AuthRequest, res: Response): Promise<void>
 
     // Only people who belong to the room can invite others to it; otherwise this endpoint
     // would let anyone make the server email arbitrary addresses.
-    if (!(await isRoomMember(roomId, user.id, room.hostId))) {
+    if (!(await hasRoomPermission(roomId, user.id, room.hostId, false))) {
       res.status(403).json({ error: "Join this room before inviting people to it" });
       return;
     }
@@ -332,6 +337,10 @@ export const joinRoom = async (req: AuthRequest, res: Response): Promise<void> =
 
     if (!room) {
       res.status(404).json({ error: "Room not found" });
+      return;
+    }
+    if (room.endedAt) {
+      res.status(410).json({ error: "This room has ended" });
       return;
     }
 
@@ -403,10 +412,10 @@ export const endRoom = async (req: AuthRequest, res: Response): Promise<void> =>
     if (roomManager) {
       await roomManager.forceEndRoom(id);
     } else {
-      await prisma.room.update({
-        where: { id },
-        data: { isActive: false },
-      });
+      await prisma.$transaction([
+        prisma.room.update({ where: { id }, data: { isActive: false, endedAt: new Date() } }),
+        prisma.participant.deleteMany({ where: { roomId: id } }),
+      ]);
     }
     res.status(200).json({ message: "Room ended successfully" });
   } catch (error) {
@@ -562,7 +571,7 @@ export const inviteGroup = async (req: AuthRequest, res: Response): Promise<void
       res.status(404).json({ error: "Room not found" });
       return;
     }
-    if (!(await isRoomMember(roomId, userId, room.hostId))) {
+    if (!(await hasRoomPermission(roomId, userId, room.hostId, false))) {
       res.status(403).json({ error: "Join this room before inviting people to it" });
       return;
     }
@@ -595,7 +604,7 @@ export const listReplays = async (req: AuthRequest, res: Response): Promise<void
       res.status(404).json({ error: "Room not found" });
       return;
     }
-    if (!(await isRoomMember(roomId, req.userId!, room.hostId))) {
+    if (!(await hasRoomPermission(roomId, req.userId!, room.hostId, true))) {
       res.status(403).json({ error: "Only people who joined this room can see its replays" });
       return;
     }
@@ -627,7 +636,7 @@ export const getReplay = async (req: AuthRequest, res: Response): Promise<void> 
       res.status(404).json({ error: "Room not found" });
       return;
     }
-    if (!(await isRoomMember(roomId, req.userId!, room.hostId))) {
+    if (!(await hasRoomPermission(roomId, req.userId!, room.hostId, true))) {
       res.status(403).json({ error: "Only people who joined this room can see its replays" });
       return;
     }

@@ -159,11 +159,15 @@ export const setupSocketHandlers = (io: Server, gracePeriodOrManager?: number | 
         // Authoritative check
         const roomAuth = await prisma.room.findUnique({
           where: { id: roomId },
-          select: { isPrivate: true, password: true, hostId: true }
+          select: { isPrivate: true, password: true, hostId: true, endedAt: true }
         });
 
         if (!roomAuth) {
           socket.emit("error", { message: "Room not found" });
+          return;
+        }
+        if (roomAuth.endedAt) {
+          socket.emit("error", { message: "This room has ended" });
           return;
         }
 
@@ -219,7 +223,7 @@ export const setupSocketHandlers = (io: Server, gracePeriodOrManager?: number | 
 
         const success = await roomManager.handleJoin(roomId, socket.id, userId, displayName, avatarVersion);
         if (!success) {
-          socket.emit("error", { message: "Room not found" });
+          socket.emit("error", { message: "Unable to join this room right now" });
           return;
         }
 
@@ -698,6 +702,10 @@ export const setupSocketHandlers = (io: Server, gracePeriodOrManager?: number | 
 
       const targetName = room.participantNames.get(payload.targetSocketId) || "A participant";
       const socketIds = await roomManager.kickUser(senderRoomId, targetUserId);
+      if (socketIds.length === 0) {
+        socket.emit("error", { message: "Could not remove this participant right now" });
+        return;
+      }
       for (const sid of socketIds) {
         const target = io.sockets.sockets.get(sid);
         target?.emit("kicked", { roomId: senderRoomId });
