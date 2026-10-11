@@ -38,6 +38,7 @@ const environment = {
 };
 
 const regularTests = [
+  "break_focus",
   "phase1_security_lifecycle",
   "room_features",
   "http_features",
@@ -67,7 +68,13 @@ if (multi || redisUrl) {
   environment.REDIS_URL = redisUrl;
 }
 
-const testNames = multi ? ["multi_instance"] : [...regularTests, ...(redisUrl ? ["multi_instance"] : [])];
+const only = process.argv.find((arg) => arg.startsWith("--only="))?.slice("--only=".length);
+const availableTests = multi ? ["multi_instance"] : [...regularTests, ...(redisUrl ? ["multi_instance"] : [])];
+if (only && !availableTests.includes(only)) {
+  console.error("Unknown or unavailable test suite.");
+  process.exit(1);
+}
+const testNames = only ? [only] : availableTests;
 for (const name of testNames) {
   console.log(`\nRunning ${name}.test.ts`);
   const result = spawnSync(process.execPath, [require.resolve("ts-node/dist/bin"), path.join(__dirname, "..", "src", "tests", `${name}.test.ts`)], {

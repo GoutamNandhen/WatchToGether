@@ -7,6 +7,7 @@ interface MobileControlBarProps {
   localStream: MediaStream | null;
   isHost: boolean;
   isSharingScreen: boolean;
+  focusMode?: boolean;
   onToggleAudio: () => void;
   onToggleVideo: () => void;
   onShareScreen: () => void;
@@ -46,7 +47,7 @@ const Control = ({
 
 /** Thumb-reachable room controls for phones. */
 export default function MobileControlBar({
-  roomId, localStream, isHost, isSharingScreen, onToggleAudio, onToggleVideo, onShareScreen, onOpenHostControls, onInvite, onLeave, onFullscreen,
+  roomId, localStream, isHost, isSharingScreen, focusMode = false, onToggleAudio, onToggleVideo, onShareScreen, onOpenHostControls, onInvite, onLeave, onFullscreen,
 }: MobileControlBarProps) {
   const micOn = !!localStream?.getAudioTracks().some((t) => t.enabled && t.readyState === "live");
   const camOn = !!localStream?.getVideoTracks().some((t) => t.enabled && t.readyState === "live");
@@ -62,10 +63,10 @@ export default function MobileControlBar({
       <Control label={camOn ? "Camera" : "Camera off"} onClick={onToggleVideo} active={camOn}>
         {camOn ? <Video size={18} /> : <VideoOff size={18} />}
       </Control>
-      <div className="flex min-w-0 flex-1 flex-col items-center gap-1 text-[10px] font-medium text-slate-200">
+      {!focusMode && <div className="flex min-w-0 flex-1 flex-col items-center gap-1 text-[10px] font-medium text-slate-200">
         <ReactionPicker roomId={roomId} align="center" className="[&>button]:h-9 [&>button]:w-9 [&>button]:rounded-full" />
         <span>React</span>
-      </div>
+      </div>}
       {isHost ? (
         <Control label="Controls" onClick={onOpenHostControls}>
           <SlidersHorizontal size={18} />

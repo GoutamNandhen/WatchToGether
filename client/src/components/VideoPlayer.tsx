@@ -34,6 +34,8 @@ const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(({ roomId, isFu
   const { socket } = useSocketStore();
   const subtitles = useSocketStore((s) => s.subtitles);
   const countdownEndsAt = useSocketStore((s) => s.countdownEndsAt);
+  const breakState = useSocketStore((s) => s.breakState);
+  const [customBreakMinutes, setCustomBreakMinutes] = useState("15");
   const [showSubtitles, setShowSubtitles] = useState(() => localStorage.getItem("wt_pref_subtitles") !== "false");
   const bufferingRef = useRef(false);
   const [url, setUrl] = useState("https://www.youtube.com/watch?v=aqz-KE-bpKQ");
@@ -436,6 +438,7 @@ const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(({ roomId, isFu
   ) : null;
 
   const handlePlay = () => {
+    if (breakState) { setPlaying(false); return; }
     if (localFileUrlRef.current === urlRef.current && !capturedFileStreamRef.current) return;
     if (isHandlingRemote.current) return;
     if (!isHost) {
@@ -449,6 +452,7 @@ const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(({ roomId, isFu
   };
 
   const handlePause = () => {
+    if (breakState) return;
     if (isHandlingRemote.current) return;
     if (!isHost) {
       if (lastSyncStateRef.current?.playing) revertToRoomState();
@@ -460,6 +464,7 @@ const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(({ roomId, isFu
   };
 
   const handleSeek = (seconds: number) => {
+    if (breakState) return;
     if (isHandlingRemote.current) return;
     if (!isHostRef.current) {
       socket?.emit("request_sync", { roomId });
@@ -500,6 +505,7 @@ const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(({ roomId, isFu
 
   const changeVideo = (e: React.FormEvent) => {
     e.preventDefault();
+    if (breakState) return;
     if (inputUrl) {
       let finalUrl = inputUrl.trim();
       if (!/^https?:\/\//i.test(finalUrl)) {
@@ -522,6 +528,7 @@ const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(({ roomId, isFu
   };
 
   const handleStopMedia = () => {
+    if (breakState) return;
     // A local file is shared as a captured stream; stop that broadcast too.
     stopBroadcast?.();
     setUrl("");
@@ -534,6 +541,7 @@ const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(({ roomId, isFu
   const Player: any = (ReactPlayer as any).default || ReactPlayer;
 
   const handleLocalFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (breakState) { e.target.value = ""; return; }
     const file = e.target.files?.[0];
     e.target.value = "";
     if (!file) return;
@@ -597,14 +605,14 @@ const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(({ roomId, isFu
                   className={`w-full rounded-lg border bg-black/40 py-2 pl-8 pr-2 text-sm text-white placeholder:text-slate-500 transition-colors focus:outline-none focus:ring-2 ${videoError ? 'border-red-500/60 focus:ring-red-500/40' : 'border-white/10 focus:border-indigo-400/60 focus:ring-indigo-500/30'}`}
                 />
               </div>
-              <button type="submit" className="btn-primary px-3 py-2 text-xs">
+              <button type="submit" disabled={!!breakState} className="btn-primary px-3 py-2 text-xs disabled:opacity-50">
                 Play
               </button>
             </form>
             <label className="flex cursor-pointer items-center gap-2 rounded-lg border border-dashed border-white/15 px-3 py-2 text-xs text-slate-300 transition-colors hover:border-indigo-400/50 hover:bg-white/[0.03]">
               <FileVideo size={14} className="text-indigo-300" />
               <span className="flex-1">Play a local video file</span>
-              <input type="file" accept="video/*" onChange={handleLocalFile} className="sr-only" />
+              <input type="file" accept="video/*" onChange={handleLocalFile} disabled={!!breakState} className="sr-only" />
             </label>
             <div className="flex items-center gap-2">
               <label className="flex flex-1 cursor-pointer items-center gap-2 rounded-lg border border-dashed border-white/15 px-3 py-2 text-xs text-slate-300 transition-colors hover:border-indigo-400/50 hover:bg-white/[0.03]">
@@ -623,7 +631,7 @@ const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(({ roomId, isFu
                 </>
               )}
             </div>
-            {url && (
+            {url && !breakState && (
               <div className="flex items-center gap-2">
                 {countdownEndsAt ? (
                   <button type="button" onClick={() => socket?.emit("cancel_countdown", { roomId })} className="btn-secondary flex-1 px-3 py-2 text-xs">
@@ -644,13 +652,29 @@ const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(({ roomId, isFu
                 )}
               </div>
             )}
+            <div className="flex flex-wrap items-center gap-2 border-t border-white/5 pt-2" aria-label="Smart break controls">
+              {breakState ? (
+                <span className="text-xs text-amber-200">Break in progress — use the room prompt to {breakState.status === "ready" ? "resume" : "end it early"}.</span>
+              ) : (
+                <>
+                  {[5, 10].map((minutes) => (
+                    <button key={minutes} type="button" onClick={() => socket?.emit("start_break", { roomId, seconds: minutes * 60 })} className="btn-secondary px-3 py-2 text-xs">Break {minutes}m</button>
+                  ))}
+                  <label className="flex items-center gap-1 text-xs text-slate-300">
+                    <span>Custom minutes</span>
+                    <input type="number" min="1" max="60" step="1" value={customBreakMinutes} onChange={(e) => setCustomBreakMinutes(e.target.value)} className="w-14 rounded border border-white/15 bg-black/40 px-1 py-1.5 text-white" />
+                  </label>
+                  <button type="button" disabled={!Number.isInteger(Number(customBreakMinutes)) || Number(customBreakMinutes) < 1 || Number(customBreakMinutes) > 60} onClick={() => socket?.emit("start_break", { roomId, seconds: Number(customBreakMinutes) * 60 })} className="btn-secondary px-3 py-2 text-xs disabled:opacity-50">Start break</button>
+                </>
+              )}
+            </div>
             <div className="flex items-center gap-2 border-t border-white/5 pt-2.5">
               {shareScreen && isScreenShareSupported() && (
                 <button onClick={shareScreen} className="btn-secondary flex-1 px-3 py-2 text-xs">
                   <MonitorUp size={14} /> Share screen
                 </button>
               )}
-              <button onClick={handleStopMedia} className="btn-danger flex-1 px-3 py-2 text-xs">
+              <button onClick={handleStopMedia} disabled={!!breakState} className="btn-danger flex-1 px-3 py-2 text-xs disabled:opacity-50">
                 <Square size={12} /> Stop media
               </button>
             </div>
@@ -718,7 +742,7 @@ const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(({ roomId, isFu
             url={url}
             width="100%"
             height="100%"
-            playing={playing}
+            playing={playing && !breakState}
             volume={volume}
             playbackRate={playbackRate}
             onPlay={handlePlay}

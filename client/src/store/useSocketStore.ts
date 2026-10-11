@@ -62,6 +62,12 @@ export interface RecentlyPlayed {
   playedAt: number;
 }
 
+export interface BreakView {
+  status: 'counting' | 'ready';
+  /** Deadline converted to the local clock using the server timestamp. */
+  localEndsAt: number;
+}
+
 const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 /** True when a message @-mentions the given name (full name or first name). */
@@ -137,6 +143,8 @@ interface SocketState {
   recentlyPlayed: RecentlyPlayed[];
   /** Local clock time the countdown ends, or null. */
   countdownEndsAt: number | null;
+  breakState: BreakView | null;
+  focusMode: boolean;
   unreadMentions: number;
   poll: PollView | null;
   myPollVote: number | null;
@@ -191,6 +199,8 @@ export const useSocketStore = create<SocketState>((set, get) => ({
   viewerSync: {},
   recentlyPlayed: [],
   countdownEndsAt: null,
+  breakState: null,
+  focusMode: false,
   unreadMentions: 0,
   poll: null,
   myPollVote: null,
@@ -311,6 +321,12 @@ export const useSocketStore = create<SocketState>((set, get) => ({
         set({ countdownEndsAt: data ? Date.now() + (data.endsAt - data.serverTime) : null });
       });
 
+      socket.on('break_state', (data: { state: { status: 'counting' | 'ready'; endsAt: number } | null; serverTime: number }) => {
+        set({ breakState: data.state ? { status: data.state.status, localEndsAt: Date.now() + (data.state.endsAt - data.serverTime) } : null });
+      });
+
+      socket.on('focus_mode', ({ enabled }: { enabled: boolean }) => set({ focusMode: enabled }));
+
       socket.on('subtitles_updated', (subtitles: Subtitles | null) => {
         set({ subtitles });
       });
@@ -366,7 +382,7 @@ export const useSocketStore = create<SocketState>((set, get) => ({
 
       socket.on('kicked', ({ roomId }: { roomId: string }) => {
         if (get().currentRoomSession?.roomId === roomId) {
-          set({ exitReason: 'kicked', currentRoomSession: null });
+          set({ exitReason: 'kicked', currentRoomSession: null, breakState: null, focusMode: false });
         }
       });
 
@@ -384,7 +400,7 @@ export const useSocketStore = create<SocketState>((set, get) => ({
 
       socket.on('room_ended', ({ roomId }: { roomId: string }) => {
         if (get().currentRoomSession?.roomId === roomId) {
-          set({ endedRoomId: roomId, currentRoomSession: null });
+          set({ endedRoomId: roomId, currentRoomSession: null, breakState: null, focusMode: false });
         }
       });
 
@@ -437,13 +453,15 @@ export const useSocketStore = create<SocketState>((set, get) => ({
         connectionStatus: 'disconnected',
         reconnectError: null,
         participants: {},
+        breakState: null,
+        focusMode: false,
       });
     }
   },
 
   joinRoom: (roomId, userId, userName, password) => {
     const session: RoomSession = { roomId, userId, userName, password };
-    set({ currentRoomSession: session, reconnectError: null, roomAccessError: null, endedRoomId: null, exitReason: null });
+    set({ currentRoomSession: session, reconnectError: null, roomAccessError: null, endedRoomId: null, exitReason: null, breakState: null, focusMode: false });
     const { socket } = get();
     if (socket && socket.connected) {
       socket.emit('join_room', session);
@@ -451,7 +469,7 @@ export const useSocketStore = create<SocketState>((set, get) => ({
   },
 
   leaveRoom: (roomId, userId, userName) => {
-    set({ currentRoomSession: null, reconnectError: null, roomAccessError: null, participants: {}, reactions: [], queue: [], typingUsers: {}, roomInfo: null, subtitles: null, skipVotes: { count: 0, needed: 1, voters: [] }, viewerSync: {}, recentlyPlayed: [], countdownEndsAt: null, unreadMentions: 0, poll: null, myPollVote: null, chatSettings: { slowModeSeconds: 0, muted: [] } });
+    set({ currentRoomSession: null, reconnectError: null, roomAccessError: null, participants: {}, reactions: [], queue: [], typingUsers: {}, roomInfo: null, subtitles: null, skipVotes: { count: 0, needed: 1, voters: [] }, viewerSync: {}, recentlyPlayed: [], countdownEndsAt: null, breakState: null, focusMode: false, unreadMentions: 0, poll: null, myPollVote: null, chatSettings: { slowModeSeconds: 0, muted: [] } });
     const { socket } = get();
     if (socket) {
       socket.emit('leave_room', { roomId, userId, userName });

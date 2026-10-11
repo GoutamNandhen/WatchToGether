@@ -245,6 +245,8 @@ export const setupSocketHandlers = (io: Server, gracePeriodOrManager?: number | 
           socket.emit("chat_settings", roomManager.getChatSettings(roomId));
           const countdownEndsAt = roomManager.getCountdownEndsAt(roomId);
           if (countdownEndsAt) socket.emit("countdown", { endsAt: countdownEndsAt, serverTime: Date.now() });
+          socket.emit("break_state", { state: roomManager.getBreakState(roomId), serverTime: Date.now() });
+          socket.emit("focus_mode", { enabled: room.focusMode });
           socket.emit("room_participant_statuses", roomManager.getParticipantStatuses(roomId));
           socket.emit("room_participants", roomManager.getParticipants(roomId));
         }
@@ -370,6 +372,7 @@ export const setupSocketHandlers = (io: Server, gracePeriodOrManager?: number | 
       const senderRoomId = roomManager.getSocketRoomId(socket.id);
       if (senderRoomId !== payload.roomId) return;
       if (!roomManager.isAuthorized(senderRoomId, userId)) return;
+      if (roomManager.getBreakState(senderRoomId)) return;
 
       roomManager.updatePlayback(senderRoomId, { playing: true, time: payload.time });
       socket.to(senderRoomId).emit("play_video", { time: payload.time, serverTime: Date.now() });
@@ -381,6 +384,7 @@ export const setupSocketHandlers = (io: Server, gracePeriodOrManager?: number | 
       const senderRoomId = roomManager.getSocketRoomId(socket.id);
       if (senderRoomId !== payload.roomId) return;
       if (!roomManager.isAuthorized(senderRoomId, userId)) return;
+      if (roomManager.getBreakState(senderRoomId)) return;
 
       roomManager.updatePlayback(senderRoomId, { playing: false, time: payload.time });
       socket.to(senderRoomId).emit("pause_video", { time: payload.time, serverTime: Date.now() });
@@ -392,6 +396,7 @@ export const setupSocketHandlers = (io: Server, gracePeriodOrManager?: number | 
       const senderRoomId = roomManager.getSocketRoomId(socket.id);
       if (senderRoomId !== payload.roomId) return;
       if (!roomManager.isAuthorized(senderRoomId, userId)) return;
+      if (roomManager.getBreakState(senderRoomId)) return;
 
       roomManager.updatePlayback(senderRoomId, { time: payload.time });
       socket.to(senderRoomId).emit("seek_video", { time: payload.time, serverTime: Date.now() });
@@ -403,6 +408,7 @@ export const setupSocketHandlers = (io: Server, gracePeriodOrManager?: number | 
       const senderRoomId = roomManager.getSocketRoomId(socket.id);
       if (senderRoomId !== payload.roomId) return;
       if (!roomManager.isAuthorized(senderRoomId, userId)) return;
+      if (roomManager.getBreakState(senderRoomId)) return;
 
       roomManager.updatePlayback(senderRoomId, {
         time: payload.time,
@@ -420,6 +426,7 @@ export const setupSocketHandlers = (io: Server, gracePeriodOrManager?: number | 
       const senderRoomId = roomManager.getSocketRoomId(socket.id);
       if (senderRoomId !== payload.roomId) return;
       if (!roomManager.isAuthorized(senderRoomId, userId)) return;
+      if (roomManager.getBreakState(senderRoomId)) return;
 
       const changed = roomManager.updatePlayback(senderRoomId, { url: payload.url, time: 0 });
       socket.to(senderRoomId).emit("change_video", { url: payload.url });
@@ -433,6 +440,7 @@ export const setupSocketHandlers = (io: Server, gracePeriodOrManager?: number | 
       if (!p) return;
       const senderRoomId = roomManager.getSocketRoomId(socket.id);
       if (senderRoomId !== p.roomId || !roomManager.isAuthorized(senderRoomId, userId)) return;
+      if (roomManager.getBreakState(senderRoomId)) return;
       const room = roomManager.getRoom(senderRoomId);
       if (!room || !room.playback.url) {
         socket.emit("error", { message: "Pick a video before starting a countdown" });
@@ -460,6 +468,58 @@ export const setupSocketHandlers = (io: Server, gracePeriodOrManager?: number | 
       const senderRoomId = roomManager.getSocketRoomId(socket.id);
       if (senderRoomId !== p.roomId || !roomManager.isAuthorized(senderRoomId, userId)) return;
       if (roomManager.cancelCountdown(senderRoomId)) io.to(senderRoomId).emit("countdown", null);
+    });
+
+    // A break is a paused room state. Its deadline only changes the prompt; playback
+    // resumes exclusively through resume_break from the current host or co-host.
+    socket.on("start_break", (data) => {
+      const p = schemas.validateSocketPayload(schemas.breakStartSchema, data, socket);
+      if (!p) return;
+      const roomId = roomManager.getSocketRoomId(socket.id);
+      if (roomId !== p.roomId || !roomManager.isAuthorized(roomId, userId)) return;
+      const room = roomManager.getRoom(roomId);
+      if (!room || roomManager.getBreakState(roomId)) return;
+      if (roomManager.cancelCountdown(roomId)) io.to(roomId).emit("countdown", null);
+      const pausedAt = roomManager.getCurrentPlaybackTime(room.playback);
+      roomManager.updatePlayback(roomId, { playing: false, time: pausedAt });
+      const state = roomManager.startBreak(roomId, p.seconds, () => {
+        io.to(roomId).emit("break_state", { state: roomManager.getBreakState(roomId), serverTime: Date.now() });
+      });
+      if (!state) return;
+      io.to(roomId).emit("pause_video", { time: pausedAt, serverTime: Date.now() });
+      io.to(roomId).emit("break_state", { state, serverTime: Date.now() });
+    });
+
+    socket.on("end_break_early", (data) => {
+      const p = schemas.validateSocketPayload(schemas.roomOnlySchema, data, socket);
+      if (!p) return;
+      const roomId = roomManager.getSocketRoomId(socket.id);
+      if (roomId !== p.roomId || !roomManager.isAuthorized(roomId, userId)) return;
+      const state = roomManager.endBreakEarly(roomId);
+      if (state) io.to(roomId).emit("break_state", { state, serverTime: Date.now() });
+    });
+
+    socket.on("resume_break", (data) => {
+      const p = schemas.validateSocketPayload(schemas.roomOnlySchema, data, socket);
+      if (!p) return;
+      const roomId = roomManager.getSocketRoomId(socket.id);
+      if (roomId !== p.roomId || !roomManager.isAuthorized(roomId, userId)) return;
+      const state = roomManager.getBreakState(roomId);
+      if (!state || state.status !== "ready") return;
+      const room = roomManager.getRoom(roomId);
+      if (!room || !roomManager.clearBreak(roomId)) return;
+      const time = room.playback.time;
+      roomManager.updatePlayback(roomId, { playing: true, time });
+      io.to(roomId).emit("break_state", { state: null, serverTime: Date.now() });
+      io.to(roomId).emit("play_video", { time, serverTime: Date.now() });
+    });
+
+    socket.on("set_focus_mode", (data) => {
+      const p = schemas.validateSocketPayload(schemas.focusModeSchema, data, socket);
+      if (!p) return;
+      const roomId = roomManager.getSocketRoomId(socket.id);
+      if (roomId !== p.roomId || !roomManager.isAuthorized(roomId, userId)) return;
+      if (roomManager.setFocusMode(roomId, p.enabled)) io.to(roomId).emit("focus_mode", { enabled: p.enabled });
     });
 
     // --- MODERATION ---
@@ -595,6 +655,7 @@ export const setupSocketHandlers = (io: Server, gracePeriodOrManager?: number | 
       if (!p) return;
       const senderRoomId = roomManager.getSocketRoomId(socket.id);
       if (senderRoomId !== p.roomId || !voteLimiter.allow(socket.id)) return;
+      if (roomManager.getBreakState(senderRoomId)) return;
       const next = roomManager.getQueue(senderRoomId)[0];
       if (!next) {
         socket.emit("error", { message: "Nothing is queued to skip to" });
@@ -736,6 +797,7 @@ export const setupSocketHandlers = (io: Server, gracePeriodOrManager?: number | 
     };
 
     function playUrlForRoom(roomId: string, url: string) {
+      if (roomManager.getBreakState(roomId)) return;
       roomManager.updatePlayback(roomId, { url, time: 0, playing: true });
       io.to(roomId).emit("change_video", { url });
       io.to(roomId).emit("play_video", { time: 0, serverTime: Date.now() });
@@ -791,6 +853,7 @@ export const setupSocketHandlers = (io: Server, gracePeriodOrManager?: number | 
       if (!p) return;
       const senderRoomId = roomManager.getSocketRoomId(socket.id);
       if (senderRoomId !== p.roomId || !roomManager.isAuthorized(senderRoomId, userId)) return;
+      if (roomManager.getBreakState(senderRoomId)) return;
       const item = roomManager.removeFromQueue(senderRoomId, p.itemId);
       if (!item) return;
       playUrlForRoom(senderRoomId, item.url);
@@ -803,6 +866,7 @@ export const setupSocketHandlers = (io: Server, gracePeriodOrManager?: number | 
       if (!p) return;
       const senderRoomId = roomManager.getSocketRoomId(socket.id);
       if (senderRoomId !== p.roomId || !roomManager.isAuthorized(senderRoomId, userId)) return;
+      if (roomManager.getBreakState(senderRoomId)) return;
       playUrlForRoom(senderRoomId, p.url);
     });
 
@@ -812,6 +876,7 @@ export const setupSocketHandlers = (io: Server, gracePeriodOrManager?: number | 
       if (!p) return;
       const senderRoomId = roomManager.getSocketRoomId(socket.id);
       if (senderRoomId !== p.roomId || !roomManager.isAuthorized(senderRoomId, userId)) return;
+      if (roomManager.getBreakState(senderRoomId)) return;
       const next = roomManager.getQueue(senderRoomId)[0];
       if (!next) return;
       roomManager.removeFromQueue(senderRoomId, next.id);

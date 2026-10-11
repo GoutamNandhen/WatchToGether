@@ -42,6 +42,10 @@ export interface Subtitles {
 }
 
 export type SyncState = "synced" | "drifting" | "buffering" | "error";
+export interface BreakState {
+  status: "counting" | "ready";
+  endsAt: number;
+}
 
 interface RoomState {
   roomId: string;
@@ -62,6 +66,8 @@ interface RoomState {
   participantAvatars: Map<string, number | null>; // socketId -> avatar version
   recentlyPlayed: { url: string; playedAt: number }[];
   countdown: { endsAt: number; timer: NodeJS.Timeout } | null;
+  breakState: (BreakState & { timer: NodeJS.Timeout | null }) | null;
+  focusMode: boolean;
   poll: Poll | null;
   slowModeSeconds: number;
   mutedUntil: Map<string, number | null>; // userId -> expiry (null = until unmuted)
@@ -165,6 +171,8 @@ export class RoomManager {
           participantAvatars: new Map(),
           recentlyPlayed: [],
           countdown: null,
+          breakState: null,
+          focusMode: false,
           poll: null,
           slowModeSeconds: 0,
           mutedUntil: new Map(),
@@ -397,6 +405,7 @@ export class RoomManager {
         clearTimeout(room.countdown.timer);
         room.countdown = null;
       }
+      if (room.breakState?.timer) clearTimeout(room.breakState.timer);
       if (room.poll?.timer) clearTimeout(room.poll.timer);
       let attempts = 0;
       while (attempts < 3) {
@@ -441,6 +450,7 @@ export class RoomManager {
       }
       room.disconnectedParticipants.clear();
       if (room.countdown) clearTimeout(room.countdown.timer);
+      if (room.breakState?.timer) clearTimeout(room.breakState.timer);
       if (room.poll?.timer) clearTimeout(room.poll.timer);
       this.rooms.delete(roomId);
       this.onRoomClosed(roomId);
@@ -806,6 +816,47 @@ export class RoomManager {
 
   public getCountdownEndsAt(roomId: string): number | null {
     return this.rooms.get(roomId)?.countdown?.endsAt ?? null;
+  }
+
+  public getBreakState(roomId: string): BreakState | null {
+    const state = this.rooms.get(roomId)?.breakState;
+    return state ? { status: state.status, endsAt: state.endsAt } : null;
+  }
+
+  public startBreak(roomId: string, seconds: number, onReady: () => void): BreakState | null {
+    const room = this.rooms.get(roomId);
+    if (!room || room.breakState) return null;
+    const endsAt = Date.now() + seconds * 1000;
+    const timer = setTimeout(() => {
+      if (this.rooms.get(roomId)?.breakState?.timer !== timer) return;
+      room.breakState = { status: "ready", endsAt, timer: null };
+      onReady();
+    }, seconds * 1000);
+    room.breakState = { status: "counting", endsAt, timer };
+    return this.getBreakState(roomId);
+  }
+
+  public endBreakEarly(roomId: string): BreakState | null {
+    const room = this.rooms.get(roomId);
+    if (!room?.breakState || room.breakState.status !== "counting") return null;
+    if (room.breakState.timer) clearTimeout(room.breakState.timer);
+    room.breakState = { status: "ready", endsAt: Date.now(), timer: null };
+    return this.getBreakState(roomId);
+  }
+
+  public clearBreak(roomId: string): boolean {
+    const room = this.rooms.get(roomId);
+    if (!room?.breakState) return false;
+    if (room.breakState.timer) clearTimeout(room.breakState.timer);
+    room.breakState = null;
+    return true;
+  }
+
+  public setFocusMode(roomId: string, enabled: boolean): boolean {
+    const room = this.rooms.get(roomId);
+    if (!room) return false;
+    room.focusMode = enabled;
+    return true;
   }
 
   public getUserRoomId(userId: string): string | undefined {

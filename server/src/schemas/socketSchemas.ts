@@ -124,6 +124,16 @@ export const countdownSchema = z.object({
   seconds: z.number().int().min(3).max(10),
 });
 
+export const breakStartSchema = z.object({
+  roomId: z.string().uuid(),
+  seconds: z.number().int().min(60).max(3600),
+});
+
+export const focusModeSchema = z.object({
+  roomId: z.string().uuid(),
+  enabled: z.boolean(),
+});
+
 export const deleteMessageSchema = z.object({
   roomId: z.string().uuid(),
   messageId: z.string().min(1).max(100),

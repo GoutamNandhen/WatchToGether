@@ -30,6 +30,7 @@ interface ChatPanelProps {
   variant?: "sidebar" | "embedded";
   /** Extra tab for camera tiles (used by the phone layout). */
   camerasTab?: { count: number; content: React.ReactNode };
+  initialTab?: "chat" | "cameras";
 }
 
 const TYPING_IDLE_MS = 3000;
@@ -53,7 +54,7 @@ const formatTime = (iso: string) => new Date(iso).toLocaleTimeString([], { hour:
 
 export default function ChatPanel({
   roomId, currentUser, isHost, hostId, coHostIds, hostAnnouncementActive, onToggleAnnouncement, onSeek, getTimestamp,
-  onOpenInvite, onOpenSettings, onClose, onMakeCoHost, onKick, variant = "sidebar", camerasTab,
+  onOpenInvite, onOpenSettings, onClose, onMakeCoHost, onKick, variant = "sidebar", camerasTab, initialTab = "chat",
 }: ChatPanelProps) {
   const embedded = variant === "embedded";
   const messages = useSocketStore((s) => s.messages);
@@ -85,7 +86,7 @@ export default function ChatPanel({
   const muteOf = (uid: string) => chatSettings.muted.find((m) => m.userId === uid && (m.until === null || m.until > now));
   const myMute = muteOf(currentUser.id) ?? null;
   const socket = useSocketStore((s) => s.socket);
-  const [tab, setTab] = useState<"chat" | "queue" | "people" | "cameras">("chat");
+  const [tab, setTab] = useState<"chat" | "queue" | "people" | "cameras">(initialTab);
   const [queueView, setQueueView] = useState<"next" | "find">(() => (useSocketStore.getState().queue.length ? "next" : "find"));
   const isTypingRef = useRef(false);
   const typingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);

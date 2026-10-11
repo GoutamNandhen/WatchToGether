@@ -8,7 +8,7 @@ import RemoteAudioManager from "../components/RemoteAudioManager";
 import { useWebRTC } from "../hooks/useWebRTC";
 import { useVoiceActivityDetection } from "../hooks/useVoiceActivityDetection";
 import { useAudioStore } from "../store/useAudioStore";
-import { Mic2, MessageSquare, Users, ChevronRight, Share2, LogOut, Copy, Check, WifiOff, SlidersHorizontal, Settings } from "lucide-react";
+import { Mic, MicOff, Video, VideoOff, Mic2, MessageSquare, Users, ChevronRight, Share2, LogOut, Copy, Check, WifiOff, SlidersHorizontal, Settings, Eye, EyeOff } from "lucide-react";
 import api, { getErrorMessage } from "../lib/api";
 import AudioSettingsModal from "../components/AudioSettingsModal";
 import InviteModal from "../components/InviteModal";
@@ -18,6 +18,7 @@ import ChatPanel from "../components/ChatPanel";
 import PasswordPrompt from "../components/PasswordPrompt";
 import { ReactionOverlay, ReactionPicker } from "../components/Reactions";
 import CountdownOverlay from "../components/CountdownOverlay";
+import BreakOverlay from "../components/BreakOverlay";
 import CameraPopout from "../components/CameraPopout";
 import MobileControlBar from "../components/MobileControlBar";
 import { useIsMobile } from "../lib/useMediaQuery";
@@ -49,6 +50,21 @@ export default function Room() {
   const [coHostIds, setCoHostIds] = useState<string[]>([]);
   const isHost = !!user && (hostId === user.id || coHostIds.includes(user.id));
   const isRoomHost = !!user && hostId === user.id;
+  const focusMode = useSocketStore((s) => s.focusMode);
+  const breakState = useSocketStore((s) => s.breakState);
+  const [focusRevealChat, setFocusRevealChat] = useState(false);
+  const [focusRevealCameras, setFocusRevealCameras] = useState(false);
+  useEffect(() => {
+    if (!socket) return;
+    const onFocusMode = ({ enabled }: { enabled: boolean }) => {
+      if (enabled) {
+        setFocusRevealChat(false);
+        setFocusRevealCameras(false);
+      }
+    };
+    socket.on("focus_mode", onFocusMode);
+    return () => { socket.off("focus_mode", onFocusMode); };
+  }, [socket]);
   const [isChatOpen, setIsChatOpen] = useState(() => typeof window !== "undefined" && window.innerWidth >= 1280);
   const [passwordPrompt, setPasswordPrompt] = useState<{ open: boolean; error: string | null }>({ open: false, error: null });
   const [codeCopied, setCodeCopied] = useState(false);
@@ -68,7 +84,7 @@ export default function Room() {
   };
 
   const handleSeekToTime = (timeStr: string) => {
-    if (!isHost) return;
+    if (!isHost || breakState) return;
     const parts = timeStr.split(':').map(Number);
     const seconds = parts.length === 3 
       ? parts[0] * 3600 + parts[1] * 60 + parts[2] 
@@ -408,7 +424,8 @@ export default function Room() {
           shortcutHandlersRef.current.toggleVideo();
           break;
         case 'c':
-          setIsChatOpen((open) => !open);
+          if (useSocketStore.getState().focusMode) setFocusRevealChat((open) => !open);
+          else setIsChatOpen((open) => !open);
           break;
         case 'i':
           setIsInviteModalOpen(true);
@@ -560,6 +577,7 @@ export default function Room() {
           <button onClick={() => setIsSettingsOpen(true)} className="btn-ghost p-2" aria-label="Audio settings">
             <Settings size={18} />
           </button>
+          {isHost && id && <button type="button" onClick={() => socket?.emit("set_focus_mode", { roomId: id, enabled: !focusMode })} className="btn-ghost p-2" aria-label={focusMode ? "Disable focus mode" : "Enable focus mode"}>{focusMode ? <Eye size={18} /> : <EyeOff size={18} />}</button>}
         </header>
       )}
 
@@ -616,6 +634,25 @@ export default function Room() {
             </div>
           )}
 
+          {isMobile && isFullscreen && isHost && id && (
+            <div className="absolute right-2 top-2 z-[9750] flex gap-1.5">
+              <button type="button" onClick={() => setIsHostControlsOpen(true)} className="btn-secondary px-3 py-2 text-xs">Controls</button>
+              <button type="button" onClick={() => socket?.emit("set_focus_mode", { roomId: id, enabled: !focusMode })} className="btn-secondary px-3 py-2 text-xs" aria-label={focusMode ? "Disable focus mode" : "Enable focus mode"}>{focusMode ? "Exit focus" : "Focus"}</button>
+            </div>
+          )}
+
+          {focusMode && id && (
+            <nav className={`absolute left-2 z-[9750] flex max-w-[calc(100%-1rem)] flex-wrap items-center gap-1 rounded-xl border border-white/15 bg-ink-950/85 p-1.5 text-white shadow-lg backdrop-blur ${isMobile && isFullscreen && isHost ? "top-12" : "top-2"}`} aria-label="Focus mode controls">
+              <span className="px-2 text-xs font-semibold">Focus</span>
+              <button type="button" onClick={() => { setFocusRevealChat((open) => !open); setFocusRevealCameras(false); }} className="btn-ghost p-2" aria-label={focusRevealChat ? "Hide chat panel" : "Reveal chat panel"} aria-pressed={focusRevealChat}><MessageSquare size={16} /></button>
+              <button type="button" onClick={() => { setFocusRevealCameras((open) => !open); setFocusRevealChat(false); }} className="btn-ghost p-2" aria-label={focusRevealCameras ? "Hide camera panel" : "Reveal camera panel"} aria-pressed={focusRevealCameras}><Users size={16} /></button>
+              <button type="button" onClick={toggleAudio} className="btn-ghost p-2" aria-label="Toggle microphone">{localStreamState?.getAudioTracks().some((t) => t.enabled) ? <Mic size={16} /> : <MicOff size={16} />}</button>
+              <button type="button" onClick={toggleVideo} className="btn-ghost p-2" aria-label="Toggle camera">{localStreamState?.getVideoTracks().some((t) => t.enabled) ? <Video size={16} /> : <VideoOff size={16} />}</button>
+              {isHost && <button type="button" onClick={() => socket?.emit("set_focus_mode", { roomId: id, enabled: false })} className="btn-ghost px-2 py-1.5 text-xs" aria-label="Disable focus mode">Exit focus</button>}
+              <button type="button" onClick={() => navigate('/dashboard')} className="btn-ghost p-2 text-red-300" aria-label="Leave room"><LogOut size={16} /></button>
+            </nav>
+          )}
+
           {!isMobile && (
           <>
           {/* Top Edge Overlay Area */}
@@ -626,6 +663,7 @@ export default function Room() {
             {/* Main Screen Selection Dropdown */}
             <div className="absolute top-4 left-4 z-50">
               {screenSourceSelect}
+              {isHost && id && <button type="button" onClick={() => socket?.emit("set_focus_mode", { roomId: id, enabled: !focusMode })} className="btn-secondary ml-2 px-3 py-2 text-xs" aria-label={focusMode ? "Disable focus mode" : "Enable focus mode"}>{focusMode ? "Exit focus" : "Focus mode"}</button>}
             </div>
 
             {/* Room Info & Duration */}
@@ -711,7 +749,7 @@ export default function Room() {
             onMouseLeave={() => setHoverZones(p => ({ ...p, right: false }))}
           >
             <div className="flex flex-col items-center gap-2">
-              {(!isCameraSidebarOpen || isFullscreen) && (
+              {(!focusMode && (!isCameraSidebarOpen || isFullscreen)) && (
                 <button 
                   onClick={() => {
                     if (isFullscreen) {
@@ -726,7 +764,7 @@ export default function Room() {
                   <Users size={20} className="transition-transform group-hover:-translate-x-0.5" />
                 </button>
               )}
-              {(!isChatOpen || isFullscreen) && (
+              {(!focusMode && (!isChatOpen || isFullscreen)) && (
                 <button 
                   onClick={() => {
                     if (isFullscreen) {
@@ -750,20 +788,20 @@ export default function Room() {
                   )}
                 </button>
               )}
-              <button
+              {!focusMode && <button
                 onClick={() => setIsInviteModalOpen(true)}
                 className="grid h-11 w-11 place-items-center rounded-xl border border-white/10 bg-ink-900/80 text-slate-200 shadow-lg backdrop-blur transition-colors hover:bg-indigo-500/30 hover:text-white"
                 title="Invite people"
                 aria-label="Invite people"
               >
                 <Share2 size={18} />
-              </button>
-              <CameraPopout
+              </button>}
+              {!focusMode && <CameraPopout
                 localStream={localStreamState || localStream.current}
                 peers={peers}
                 className="grid h-11 w-11 place-items-center rounded-xl border border-white/10 bg-ink-900/80 text-slate-200 shadow-lg backdrop-blur transition-colors hover:bg-indigo-500/30 hover:text-white aria-pressed:bg-indigo-500/40"
-              />
-              {id && <ReactionPicker roomId={id} />}
+              />}
+              {id && !focusMode && <ReactionPicker roomId={id} />}
 
               <button 
                 onClick={() => navigate('/dashboard')}
@@ -779,11 +817,22 @@ export default function Room() {
           )}
 
           {/* Floating emoji reactions (inside the fullscreen container so they stay visible) */}
-          <ReactionOverlay />
+          {!focusMode && <ReactionOverlay />}
           {id && <CountdownOverlay roomId={id} canCancel={isHost} />}
+          {id && <BreakOverlay roomId={id} canControl={isHost} />}
+          {focusMode && focusRevealChat && isFullscreen && id && user && (
+            <div className="absolute bottom-16 right-2 top-16 z-[9800] w-[min(24rem,calc(100%-1rem))] overflow-hidden rounded-xl border border-white/15 shadow-2xl">
+              <ChatPanel variant="embedded" roomId={id} currentUser={user} isHost={isHost} hostId={hostId} coHostIds={coHostIds}
+                hostAnnouncementActive={hostAnnouncementActive} onToggleAnnouncement={toggleHostAnnouncement}
+                onSeek={handleSeekToTime} getTimestamp={getTimestamp} onOpenInvite={() => setIsInviteModalOpen(true)}
+                onOpenSettings={() => setIsSettingsOpen(true)} onClose={() => setFocusRevealChat(false)}
+                onMakeCoHost={(targetSocketId) => socket?.emit("make_cohost", { roomId: id, targetSocketId })}
+                onKick={(targetSocketId, name) => { if (confirm(`Remove ${name} from this room?`)) socket?.emit("kick_participant", { roomId: id, targetSocketId }); }} />
+            </div>
+          )}
           
           {/* Floating Cameras (rendered here so they overlay the video) */}
-          {id && !isMobile && (!isCameraSidebarOpen || isFullscreen) && (
+          {id && !isMobile && (!isCameraSidebarOpen || isFullscreen) && (!focusMode || focusRevealCameras) && (
             <VideoGrid 
               localStream={localStreamState || localStream.current} 
               screenStream={screenStreamState} 
@@ -808,9 +857,11 @@ export default function Room() {
       {/* Phone: tabbed panel + control bar under the video (hidden in landscape) */}
       {isMobile && !isFullscreen && id && user && (
         <>
-          <div className="min-h-0 flex-1 landscape:hidden">
+          {(!focusMode || focusRevealChat || focusRevealCameras) && <div className="min-h-0 flex-1 landscape:hidden">
             <ChatPanel
+              key={focusMode ? (focusRevealCameras ? "focus-cameras" : "focus-chat") : "normal"}
               variant="embedded"
+              initialTab={focusMode && focusRevealCameras ? "cameras" : "chat"}
               roomId={id}
               currentUser={user}
               isHost={isHost}
@@ -850,7 +901,7 @@ export default function Room() {
                 ),
               }}
             />
-          </div>
+          </div>}
           <MobileControlBar
             roomId={id}
             localStream={localStreamState || localStream.current}
@@ -863,19 +914,20 @@ export default function Room() {
             onInvite={() => setIsInviteModalOpen(true)}
             onLeave={() => navigate('/dashboard')}
             onFullscreen={toggleFullscreen}
+            focusMode={focusMode}
           />
         </>
       )}
 
       {/* Camera Sidebar */}
-      {!isMobile && !isFullscreen && isCameraSidebarOpen && (
+      {!isMobile && !isFullscreen && (focusMode ? focusRevealCameras : isCameraSidebarOpen) && (
         <div className="fixed md:relative right-0 w-full md:w-64 h-full bg-ink-900/95 border-l border-white/5 flex flex-col shadow-2xl z-[9999] md:z-10 animate-slide-in-right backdrop-blur-xl">
           <div className="px-3 py-2.5 border-b border-white/5 flex justify-between items-center">
             <span className="font-semibold text-slate-200 text-sm flex items-center gap-2">
               <Users size={16} className="text-indigo-300" /> Cameras
               <span className="rounded-full bg-white/10 px-1.5 text-[10px] font-bold text-slate-300">{peers.length + 1}</span>
             </span>
-            <button onClick={() => setIsCameraSidebarOpen(false)} className="btn-ghost px-2 py-1.5" aria-label="Close cameras">
+            <button onClick={() => focusMode ? setFocusRevealCameras(false) : setIsCameraSidebarOpen(false)} className="btn-ghost px-2 py-1.5" aria-label="Close cameras">
               <ChevronRight size={18} />
             </button>
           </div>
@@ -902,7 +954,7 @@ export default function Room() {
       )}
 
       {/* Live Chat Sidebar */}
-      {!isMobile && !isFullscreen && isChatOpen && id && user && (
+      {!isMobile && !isFullscreen && (focusMode ? focusRevealChat : isChatOpen) && id && user && (
         <ChatPanel
           roomId={id}
           currentUser={user}
@@ -915,7 +967,7 @@ export default function Room() {
           getTimestamp={getTimestamp}
           onOpenInvite={() => setIsInviteModalOpen(true)}
           onOpenSettings={() => setIsSettingsOpen(true)}
-          onClose={() => setIsChatOpen(false)}
+          onClose={() => focusMode ? setFocusRevealChat(false) : setIsChatOpen(false)}
           onMakeCoHost={(targetSocketId) => socket?.emit("make_cohost", { roomId: id, targetSocketId })}
           onKick={(targetSocketId, name) => {
             if (confirm(`Remove ${name} from this room? They can't rejoin until you allow them back in room settings.`)) {
