@@ -65,7 +65,8 @@ async function main() {
     await wait(100);
     const initial = last<{ state: { status: string; endsAt: number }; serverTime: number }>(guest, "break_state");
     check(initial?.state.status === "counting" && initial.state.endsAt > initial.serverTime, "break broadcasts authoritative deadline");
-    check(manager.getRoom(roomId)?.playback.playing === false && manager.getRoom(roomId)?.playback.time >= 23, "break pauses playback at current position");
+    const liveRoom = manager.getRoom(roomId);
+    check(liveRoom?.playback.playing === false && (liveRoom?.playback.time ?? 0) >= 23, "break pauses playback at current position");
 
     const pausedAt = manager.getRoom(roomId)!.playback.time;
     host.emit("play_video", { roomId, time: 90 });
