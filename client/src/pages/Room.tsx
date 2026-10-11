@@ -704,6 +704,7 @@ export default function Room() {
           {mainScreenSource === 'url' ? (
             id ? (
               <div 
+                key="movie-stage"
                 className={isFullscreen ? "w-[100vw] h-[100vh] max-w-none max-h-none flex-1 flex" : "w-full h-full flex-1 flex"}
                 style={isFullscreen ? { width: '100vw', height: '100vh', maxWidth: 'none', maxHeight: 'none' } : undefined}
               >
@@ -719,6 +720,7 @@ export default function Room() {
 
               return (
                 <div 
+                  key="stream-stage"
                   className={`w-full h-full flex items-center justify-center bg-black ${isFullscreen ? 'w-[100vw] h-[100vh] max-w-none max-h-none' : 'p-4'}`}
                   style={isFullscreen ? { width: '100vw', height: '100vh', maxWidth: 'none', maxHeight: 'none' } : undefined}
                 >

@@ -370,6 +370,12 @@ const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(({ roomId, isFu
     socket?.emit("request_sync", { roomId });
   };
 
+  const pausePlayerForBreak = () => {
+    const internalPlayer = playerRef.current?.getInternalPlayer();
+    if (typeof internalPlayer?.pauseVideo === 'function') internalPlayer.pauseVideo();
+    else if (typeof internalPlayer?.pause === 'function') internalPlayer.pause();
+  };
+
   // Everyone except the room clock reports how well they're keeping up, so hosts can see
   // who is buffering or drifting before pressing play.
   const sendSyncReport = useCallback(() => {
@@ -438,7 +444,11 @@ const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(({ roomId, isFu
   ) : null;
 
   const handlePlay = () => {
-    if (breakState) { setPlaying(false); return; }
+    if (breakState) {
+      pausePlayerForBreak();
+      setPlaying(false);
+      return;
+    }
     if (localFileUrlRef.current === urlRef.current && !capturedFileStreamRef.current) return;
     if (isHandlingRemote.current) return;
     if (!isHost) {
@@ -464,7 +474,11 @@ const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(({ roomId, isFu
   };
 
   const handleSeek = (seconds: number) => {
-    if (breakState) return;
+    if (breakState) {
+      const pausedAt = lastSyncStateRef.current?.time;
+      if (pausedAt !== undefined) playerRef.current?.seekTo(pausedAt, "seconds");
+      return;
+    }
     if (isHandlingRemote.current) return;
     if (!isHostRef.current) {
       socket?.emit("request_sync", { roomId });
@@ -474,6 +488,7 @@ const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(({ roomId, isFu
   };
 
   const handleProgress = (state: { playedSeconds: number }) => {
+    if (breakState) return;
     if (isRoomHostRef.current) return;
     if (!lastSyncStateRef.current || !lastSyncStateRef.current.playing) return;
     if (isHandlingRemote.current) return;
