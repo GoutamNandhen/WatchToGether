@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import ReactPlayer from "react-player";
-import { ArrowLeft, Clapperboard, MessageSquare } from "lucide-react";
+import { ArrowLeft, Bookmark, Clapperboard, MessageSquare } from "lucide-react";
 import api, { getErrorMessage } from "../lib/api";
+import type { CinemaMoment } from "../store/useSocketStore";
 import { formatClock, timeAgo } from "../lib/format";
 import Logo from "../components/ui/Logo";
 import Avatar from "../components/ui/Avatar";
@@ -15,6 +16,9 @@ interface ReplayMessage {
   avatarVersion: number | null;
   content: string;
   videoTime: number;
+  playbackSessionId: string | null;
+  isSpoiler: boolean;
+  autoReveal: boolean;
 }
 
 const describe = (url: string) => {
@@ -35,9 +39,13 @@ export default function Replay() {
   const { id = "" } = useParams();
   const [params, setParams] = useSearchParams();
   const videoUrl = params.get("url");
+  const startAt = Number(params.get("at") || 0);
   const [roomName, setRoomName] = useState("");
   const [replays, setReplays] = useState<{ videoUrl: string; messageCount: number; lastAt: string }[] | null>(null);
   const [messages, setMessages] = useState<ReplayMessage[] | null>(null);
+  const [loadedUrl, setLoadedUrl] = useState<string | null>(null);
+  const [moments, setMoments] = useState<CinemaMoment[] | null>(null);
+  const [revealedSpoilers, setRevealedSpoilers] = useState<Set<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
@@ -52,6 +60,7 @@ export default function Replay() {
           if (cancelled) return;
           setRoomName(res.data.roomName);
           setMessages(res.data.messages);
+          setLoadedUrl(videoUrl);
         })
       : api.get(`/rooms/${id}/replays`).then((res) => {
           if (cancelled) return;
@@ -64,9 +73,17 @@ export default function Replay() {
     };
   }, [id, videoUrl]);
 
+  useEffect(() => {
+    let cancelled = false;
+    api.get(`/rooms/${id}/moments`).then((res) => {
+      if (!cancelled) setMoments(res.data.moments);
+    }).catch(() => { if (!cancelled) setMoments([]); });
+    return () => { cancelled = true; };
+  }, [id]);
+
   const visible = useMemo(
-    () => (messages ?? []).filter((m) => showAll || m.videoTime <= currentTime + 0.25),
-    [messages, currentTime, showAll]
+    () => (loadedUrl === videoUrl ? messages ?? [] : []).filter((m) => showAll || m.videoTime <= currentTime + 0.25),
+    [messages, loadedUrl, videoUrl, currentTime, showAll]
   );
 
   // Keep the newest revealed message in view while watching.
@@ -76,12 +93,12 @@ export default function Replay() {
 
   // Where the chat was busiest, as a strip under the player.
   const heat = useMemo(() => {
-    if (!messages?.length || !duration) return [];
+    if (loadedUrl !== videoUrl || !messages?.length || !duration) return [];
     const buckets = new Array(60).fill(0);
     for (const m of messages) buckets[Math.min(59, Math.floor((m.videoTime / duration) * 60))]++;
     const max = Math.max(...buckets);
     return buckets.map((b) => (max ? b / max : 0));
-  }, [messages, duration]);
+  }, [messages, loadedUrl, videoUrl, duration]);
 
   const seek = (t: number) => playerRef.current?.seekTo(t, "seconds");
 
@@ -144,6 +161,7 @@ export default function Replay() {
                   onProgress={(s: { playedSeconds: number }) => setCurrentTime(s.playedSeconds)}
                   onSeek={(t: number) => setCurrentTime(t)}
                   onDuration={(d: number) => setDuration(d)}
+                  onReady={() => { if (Number.isFinite(startAt) && startAt > 0) seek(startAt); }}
                   style={{ position: "absolute", top: 0, left: 0 }}
                 />
               </div>
@@ -177,7 +195,7 @@ export default function Replay() {
                 </label>
               </div>
               <div ref={listRef} className="flex-1 space-y-3 overflow-y-auto p-4">
-                {messages === null ? (
+                {messages === null || loadedUrl !== videoUrl ? (
                   <div className="grid h-full place-items-center text-slate-500"><Spinner /></div>
                 ) : visible.length === 0 ? (
                   <p className="pt-10 text-center text-sm text-slate-500">Press play — messages appear when they were sent.</p>
@@ -192,7 +210,10 @@ export default function Replay() {
                             {formatClock(m.videoTime)}
                           </button>
                         </div>
-                        <p className="whitespace-pre-wrap break-words text-sm text-slate-200">{m.content}</p>
+                        {m.isSpoiler && !revealedSpoilers.has(m.id) ? (
+                          <button type="button" onClick={() => setRevealedSpoilers((prev) => new Set(prev).add(m.id))}
+                            className="text-sm font-semibold text-amber-200 underline underline-offset-2" aria-label="Reveal spoiler message">Reveal spoiler</button>
+                        ) : <p className="whitespace-pre-wrap break-words text-sm text-slate-200">{m.content}</p>}
                       </div>
                     </div>
                   ))
@@ -201,6 +222,21 @@ export default function Replay() {
             </aside>
           </div>
         )}
+        {!videoUrl && moments && moments.length > 0 && <section className="mt-6">
+          <h2 className="mb-3 flex items-center gap-2 text-lg font-semibold"><Bookmark size={18} /> Saved moments</h2>
+          <div className="card divide-y divide-white/5">
+            {moments.map((moment) => <button key={moment.id} type="button"
+              onClick={() => setParams({ url: moment.videoUrl, at: String(moment.videoTime) })}
+              className="flex w-full items-start justify-between gap-3 p-4 text-left hover:bg-white/[0.03]">
+              <span className="min-w-0">
+                <span className="block truncate text-sm font-medium text-slate-100">{describe(moment.videoUrl)}</span>
+                {moment.note && <span className="mt-1 block whitespace-pre-wrap break-words text-sm text-slate-300">{moment.note}</span>}
+                <span className="mt-1 block text-xs text-slate-500">{moment.userName} · {timeAgo(moment.createdAt)}</span>
+              </span>
+              <span className="shrink-0 font-mono text-xs text-indigo-300">{formatClock(moment.videoTime)}</span>
+            </button>)}
+          </div>
+        </section>}
       </main>
     </div>
   );

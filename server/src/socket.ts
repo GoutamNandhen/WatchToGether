@@ -1,5 +1,5 @@
 import { Server, Socket } from "socket.io";
-import { PrismaClient } from "@prisma/client";
+import { Prisma, PrismaClient } from "@prisma/client";
 import { verifyAuthToken } from "./middlewares/authMiddleware";
 import { RoomManager } from "./managers/RoomManager";
 import * as schemas from "./schemas/socketSchemas";
@@ -76,6 +76,7 @@ const notifyFriendsOfPresence = async (io: Server, userId: string) => {
 };
 const reactionLimiter = createLimiter(10, 3000);
 const queueLimiter = createLimiter(5, 10000);
+const momentLimiter = createLimiter(4, 10000);
 
 export const setupSocketHandlers = (io: Server, gracePeriodOrManager?: number | RoomManager) => {
   const roomManager =
@@ -273,9 +274,24 @@ export const setupSocketHandlers = (io: Server, gracePeriodOrManager?: number | 
               userId: m.userId,
               userName: m.user.name,
               content: m.content,
+              videoUrl: m.videoUrl,
+              videoTime: m.videoTime,
+              playbackSessionId: m.playbackSessionId,
+              isSpoiler: m.isSpoiler,
+              autoReveal: m.autoReveal,
               createdAt: m.createdAt.toISOString(),
             }))
           );
+          const moments = await prisma.cinemaMoment.findMany({
+            where: { roomId }, orderBy: { createdAt: "desc" }, take: 100,
+            include: { user: { select: { name: true } } },
+          });
+          socket.emit("moments_history", moments.reverse().map((m) => ({
+            id: m.id, roomId: m.roomId, userId: m.userId, userName: m.user.name,
+            videoUrl: m.videoUrl, videoTime: m.videoTime,
+            playbackSessionId: m.playbackSessionId, note: m.note,
+            createdAt: m.createdAt.toISOString(),
+          })));
         } catch (historyErr) {
           console.error("Failed to load chat history:", historyErr);
         }
@@ -309,28 +325,87 @@ export const setupSocketHandlers = (io: Server, gracePeriodOrManager?: number | 
       const userName = roomManager.getParticipantName(roomId, socket.id) || payload.userName;
       let id = `${Date.now()}-${socket.id}`;
       let createdAt = new Date().toISOString();
+      const room = roomManager.getRoom(roomId);
+      const videoUrl = room?.playback.url || null;
+      const videoTime = room && videoUrl ? roomManager.getCurrentPlaybackTime(room.playback) : null;
+      const playbackSessionId = room && videoUrl ? room.playback.sessionId : null;
+      const isSpoiler = payload.isSpoiler === true;
+      const autoReveal = isSpoiler && payload.autoReveal === true && !!videoUrl &&
+        schemas.queueAddSchema.shape.url.safeParse(videoUrl).success && videoTime !== null && Number.isFinite(videoTime);
 
       try {
         // Remember what was on screen so the chat can be replayed alongside the video later.
-        const room = roomManager.getRoom(roomId);
-        const videoUrl = room?.playback.url || null;
         const saved = await prisma.message.create({
           data: {
             content,
             userId,
             roomId,
             videoUrl,
-            videoTime: room && videoUrl ? roomManager.getCurrentPlaybackTime(room.playback) : null,
+            videoTime,
+            playbackSessionId,
+            isSpoiler,
+            autoReveal,
           }
         });
         id = saved.id;
         createdAt = saved.createdAt.toISOString();
       } catch (err) {
         console.error("Error saving message:", err);
+        if (isSpoiler) {
+          socket.emit("error", { message: "Could not save spoiler message" });
+          return;
+        }
       }
 
       // React renders this as text, so no HTML escaping is needed here.
-      io.to(roomId).emit("receive_message", { id, roomId, userId, userName, content, createdAt });
+      io.to(roomId).emit("receive_message", {
+        id, roomId, userId, userName, content, createdAt,
+        videoUrl, videoTime, playbackSessionId, isSpoiler, autoReveal,
+      });
+    });
+
+    socket.on("save_moment", async (data) => {
+      const payload = schemas.validateSocketPayload(schemas.saveMomentSchema, data, socket);
+      if (!payload || roomManager.getSocketRoomId(socket.id) !== payload.roomId) return;
+      if (!momentLimiter.allow(socket.id)) {
+        socket.emit("error", { message: "You're saving moments too quickly" });
+        return;
+      }
+      const room = roomManager.getRoom(payload.roomId);
+      if (!room) return;
+      const videoUrl = room.playback.url;
+      const videoTime = roomManager.getCurrentPlaybackTime(room.playback);
+      const playbackSessionId = room.playback.sessionId;
+      if (!schemas.queueAddSchema.shape.url.safeParse(videoUrl).success ||
+          !Number.isFinite(videoTime) || videoTime < 0 || videoTime > 86400) {
+        socket.emit("error", { message: "A valid online movie must be playing to save a moment" });
+        return;
+      }
+      try {
+        const dbRoom = await prisma.room.findUnique({ where: { id: payload.roomId }, select: { endedAt: true } });
+        if (!dbRoom || dbRoom.endedAt || roomManager.getSocketRoomId(socket.id) !== payload.roomId) return;
+        const existing = await prisma.cinemaMoment.findUnique({ where: { userId_requestId: { userId, requestId: payload.requestId } } });
+        if (existing) return;
+        if (roomManager.getSocketRoomId(socket.id) !== payload.roomId || playbackSessionId !== roomManager.getRoom(payload.roomId)?.playback.sessionId) return;
+        const saved = await prisma.cinemaMoment.create({
+          data: {
+            requestId: payload.requestId, roomId: payload.roomId, userId,
+            videoUrl, videoTime: Math.round(videoTime), playbackSessionId,
+            note: payload.note || null,
+          },
+        });
+        io.to(payload.roomId).emit("moment_saved", {
+          id: saved.id, roomId: saved.roomId, userId: saved.userId,
+          userName: roomManager.getParticipantName(payload.roomId, socket.id) || "Participant",
+          videoUrl: saved.videoUrl, videoTime: saved.videoTime,
+          playbackSessionId: saved.playbackSessionId, note: saved.note,
+          createdAt: saved.createdAt.toISOString(),
+        });
+      } catch (err) {
+        if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") return;
+        console.error("Failed to save cinema moment:", err);
+        socket.emit("error", { message: "Could not save moment" });
+      }
     });
 
     socket.on("send_reaction", (data) => {
@@ -430,6 +505,8 @@ export const setupSocketHandlers = (io: Server, gracePeriodOrManager?: number | 
 
       const changed = roomManager.updatePlayback(senderRoomId, { url: payload.url, time: 0 });
       socket.to(senderRoomId).emit("change_video", { url: payload.url });
+      const sessionId = roomManager.getRoom(senderRoomId)?.playback.sessionId;
+      io.to(senderRoomId).emit("playback_session", { url: payload.url, sessionId });
       if (changed) emitVideoScopedState(senderRoomId);
     });
 
@@ -800,6 +877,7 @@ export const setupSocketHandlers = (io: Server, gracePeriodOrManager?: number | 
       if (roomManager.getBreakState(roomId)) return;
       roomManager.updatePlayback(roomId, { url, time: 0, playing: true });
       io.to(roomId).emit("change_video", { url });
+      io.to(roomId).emit("playback_session", { url, sessionId: roomManager.getRoom(roomId)?.playback.sessionId });
       io.to(roomId).emit("play_video", { time: 0, serverTime: Date.now() });
       emitVideoScopedState(roomId);
     }
@@ -995,6 +1073,7 @@ export const setupSocketHandlers = (io: Server, gracePeriodOrManager?: number | 
         .catch((err) => console.error("Presence update failed:", err));
       reactionLimiter.forget(socket.id);
       queueLimiter.forget(socket.id);
+      momentLimiter.forget(socket.id);
       roomManager.handleDisconnect(socket.id);
     });
   });

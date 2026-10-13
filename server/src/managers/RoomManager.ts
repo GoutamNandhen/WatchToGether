@@ -1,5 +1,6 @@
 import { PrismaClient } from "@prisma/client";
 import { Server } from "socket.io";
+import { randomUUID } from "crypto";
 
 const prisma = new PrismaClient();
 
@@ -7,6 +8,7 @@ export interface PlaybackState {
   playing: boolean;
   time: number;
   url: string;
+  sessionId: string;
   lastUpdatedAt: number;
   serverTime?: number;
 }
@@ -181,6 +183,7 @@ export class RoomManager {
             playing: false,
             time: dbRoom.playbackTime ?? 0,
             url: dbRoom.playbackUrl ?? "https://www.youtube.com/watch?v=aqz-KE-bpKQ",
+            sessionId: randomUUID(),
             lastUpdatedAt: Date.now(),
           },
         };
@@ -656,7 +659,12 @@ export class RoomManager {
     const room = this.rooms.get(roomId);
     if (!room) return false;
     const urlChanged = update.url !== undefined && update.url !== room.playback.url;
-    room.playback = { ...room.playback, ...update, lastUpdatedAt: Date.now() };
+    room.playback = {
+      ...room.playback,
+      ...update,
+      sessionId: update.url !== undefined ? randomUUID() : room.playback.sessionId,
+      lastUpdatedAt: Date.now(),
+    };
     if (urlChanged) {
       // Per-video state doesn't carry over to the next video.
       room.subtitles = null;

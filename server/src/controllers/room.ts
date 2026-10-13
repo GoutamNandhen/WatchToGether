@@ -626,6 +626,32 @@ export const listReplays = async (req: AuthRequest, res: Response): Promise<void
   }
 };
 
+/** Saved points remain available to former room participants after they leave. */
+export const listCinemaMoments = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const roomId = req.params.id as string;
+    const room = await prisma.room.findUnique({ where: { id: roomId }, select: { hostId: true } });
+    if (!room) { res.status(404).json({ error: "Room not found" }); return; }
+    if (!(await hasRoomPermission(roomId, req.userId!, room.hostId, true))) {
+      res.status(403).json({ error: "Only people who joined this room can see its moments" });
+      return;
+    }
+    const moments = await prisma.cinemaMoment.findMany({
+      where: { roomId }, orderBy: { createdAt: "desc" },
+      include: { user: { select: { name: true } } },
+    });
+    res.status(200).json({ moments: moments.map((m) => ({
+      id: m.id, roomId: m.roomId, userId: m.userId, userName: m.user.name,
+      videoUrl: m.videoUrl, videoTime: m.videoTime,
+      playbackSessionId: m.playbackSessionId, note: m.note,
+      createdAt: m.createdAt.toISOString(),
+    })) });
+  } catch (error) {
+    console.error("List Cinema Moments Error:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+};
+
 /** Chat for one video, ordered by where in the video it was sent. */
 export const getReplay = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
@@ -656,6 +682,9 @@ export const getReplay = async (req: AuthRequest, res: Response): Promise<void> 
         avatarVersion: m.user.avatarUpdatedAt?.getTime() ?? null,
         content: m.content,
         videoTime: m.videoTime,
+        playbackSessionId: m.playbackSessionId,
+        isSpoiler: m.isSpoiler,
+        autoReveal: m.autoReveal,
         createdAt: m.createdAt,
       })),
     });

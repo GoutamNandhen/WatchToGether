@@ -1,7 +1,7 @@
 import { useEffect, useState, useRef, useCallback } from "react";
 import { useParams, useNavigate, useLocation } from "react-router-dom";
 import { useAuthStore } from "../store/useAuthStore";
-import { useSocketStore } from "../store/useSocketStore";
+import { useSocketStore, type CinemaMoment } from "../store/useSocketStore";
 import VideoPlayer from "../components/VideoPlayer";
 import VideoGrid from "../components/VideoGrid";
 import RemoteAudioManager from "../components/RemoteAudioManager";
@@ -92,6 +92,22 @@ export default function Room() {
     socket?.emit("seek_video", { roomId: id, time: seconds });
     socket?.emit("play_video", { roomId: id, time: seconds });
     videoPlayerRef.current?.seekTo(seconds);
+  };
+
+  const getPlaybackContext = useCallback(() => {
+    const player = videoPlayerRef.current;
+    const session = useSocketStore.getState().playbackSession;
+    if (mainScreenSource !== 'url' || !player || !session || player.getUrl() !== session.url) return null;
+    return { url: session.url, sessionId: session.sessionId, time: player.getCurrentTime() };
+  }, [mainScreenSource]);
+
+  const handleSeekToMoment = (moment: CinemaMoment) => {
+    const current = getPlaybackContext();
+    if (!isHost || breakState || !id || mainScreenSource !== 'url' ||
+        !current || current.url !== moment.videoUrl || current.sessionId !== moment.playbackSessionId) return;
+    socket?.emit("seek_video", { roomId: id, time: moment.videoTime });
+    socket?.emit("play_video", { roomId: id, time: moment.videoTime });
+    videoPlayerRef.current?.seekTo(moment.videoTime);
   };
 
   const toggleFullscreen = () => {
@@ -826,7 +842,7 @@ export default function Room() {
             <div className="absolute bottom-16 right-2 top-16 z-[9800] w-[min(24rem,calc(100%-1rem))] overflow-hidden rounded-xl border border-white/15 shadow-2xl">
               <ChatPanel variant="embedded" roomId={id} currentUser={user} isHost={isHost} hostId={hostId} coHostIds={coHostIds}
                 hostAnnouncementActive={hostAnnouncementActive} onToggleAnnouncement={toggleHostAnnouncement}
-                onSeek={handleSeekToTime} getTimestamp={getTimestamp} onOpenInvite={() => setIsInviteModalOpen(true)}
+                onSeek={handleSeekToTime} getTimestamp={getTimestamp} getPlaybackContext={getPlaybackContext} onSeekMoment={handleSeekToMoment} onOpenInvite={() => setIsInviteModalOpen(true)}
                 onOpenSettings={() => setIsSettingsOpen(true)} onClose={() => setFocusRevealChat(false)}
                 onMakeCoHost={(targetSocketId) => socket?.emit("make_cohost", { roomId: id, targetSocketId })}
                 onKick={(targetSocketId, name) => { if (confirm(`Remove ${name} from this room?`)) socket?.emit("kick_participant", { roomId: id, targetSocketId }); }} />
@@ -872,6 +888,8 @@ export default function Room() {
               hostAnnouncementActive={hostAnnouncementActive}
               onToggleAnnouncement={toggleHostAnnouncement}
               onSeek={handleSeekToTime}
+              getPlaybackContext={getPlaybackContext}
+              onSeekMoment={handleSeekToMoment}
               getTimestamp={getTimestamp}
               onOpenInvite={() => setIsInviteModalOpen(true)}
               onOpenSettings={() => setIsSettingsOpen(true)}
@@ -966,6 +984,8 @@ export default function Room() {
           hostAnnouncementActive={hostAnnouncementActive}
           onToggleAnnouncement={toggleHostAnnouncement}
           onSeek={handleSeekToTime}
+          getPlaybackContext={getPlaybackContext}
+          onSeekMoment={handleSeekToMoment}
           getTimestamp={getTimestamp}
           onOpenInvite={() => setIsInviteModalOpen(true)}
           onOpenSettings={() => setIsSettingsOpen(true)}

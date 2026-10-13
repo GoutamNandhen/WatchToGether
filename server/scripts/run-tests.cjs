@@ -38,6 +38,7 @@ const environment = {
 };
 
 const regularTests = [
+  "moments_spoilers",
   "break_focus",
   "phase1_security_lifecycle",
   "room_features",

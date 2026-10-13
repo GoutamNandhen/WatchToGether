@@ -1,11 +1,11 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { ArrowDown, ChevronDown, ChevronRight, ChevronUp, Clock, Crown, History, ListPlus, ListVideo, MessageSquare, Mic2, Play, SendHorizonal, Settings, Share2, Shield, ShieldOff, SkipForward, Trash2, Users, UserX, X } from "lucide-react";
-import { mentionsUser, useSocketStore, type Message, type QueueItem } from "../store/useSocketStore";
+import { ArrowDown, Bookmark, ChevronDown, ChevronRight, ChevronUp, Clock, Crown, History, ListPlus, ListVideo, MessageSquare, Mic2, Play, SendHorizonal, Settings, Share2, Shield, ShieldOff, SkipForward, Trash2, Users, UserX, X } from "lucide-react";
+import { mentionsUser, useSocketStore, type CinemaMoment, type Message, type QueueItem } from "../store/useSocketStore";
 import { useAudioStore } from "../store/useAudioStore";
 import { PollCard, PollComposer } from "./Polls";
 import YouTubeSearch from "./YouTubeSearch";
 import { BarChart3, MicOff, Search, Timer, Video, Volume2, VolumeX } from "lucide-react";
-import { timeAgo } from "../lib/format";
+import { formatClock, timeAgo } from "../lib/format";
 import Avatar from "./ui/Avatar";
 
 const TIMESTAMP_REGEX = /\[Time:\s*(\d{1,2}:\d{2}(?::\d{2})?)\]/g;
@@ -21,6 +21,8 @@ interface ChatPanelProps {
   onToggleAnnouncement: () => void;
   onSeek: (timeStr: string) => void;
   getTimestamp: () => string | null;
+  getPlaybackContext: () => { url: string; sessionId: string; time: number } | null;
+  onSeekMoment: (moment: CinemaMoment) => void;
   onOpenInvite: () => void;
   onOpenSettings: () => void;
   onClose: () => void;
@@ -53,11 +55,13 @@ const describeUrl = (url: string) => {
 const formatTime = (iso: string) => new Date(iso).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
 
 export default function ChatPanel({
-  roomId, currentUser, isHost, hostId, coHostIds, hostAnnouncementActive, onToggleAnnouncement, onSeek, getTimestamp,
+  roomId, currentUser, isHost, hostId, coHostIds, hostAnnouncementActive, onToggleAnnouncement, onSeek, getTimestamp, getPlaybackContext, onSeekMoment,
   onOpenInvite, onOpenSettings, onClose, onMakeCoHost, onKick, variant = "sidebar", camerasTab, initialTab = "chat",
 }: ChatPanelProps) {
   const embedded = variant === "embedded";
   const messages = useSocketStore((s) => s.messages);
+  const moments = useSocketStore((s) => s.moments);
+  const breakState = useSocketStore((s) => s.breakState);
   const participants = useSocketStore((s) => s.participants);
   const sendMessage = useSocketStore((s) => s.sendMessage);
   const setChatVisible = useSocketStore((s) => s.setChatVisible);
@@ -86,11 +90,21 @@ export default function ChatPanel({
   const muteOf = (uid: string) => chatSettings.muted.find((m) => m.userId === uid && (m.until === null || m.until > now));
   const myMute = muteOf(currentUser.id) ?? null;
   const socket = useSocketStore((s) => s.socket);
-  const [tab, setTab] = useState<"chat" | "queue" | "people" | "cameras">(initialTab);
+  const [tab, setTab] = useState<"chat" | "moments" | "queue" | "people" | "cameras">(initialTab);
   const [queueView, setQueueView] = useState<"next" | "find">(() => (useSocketStore.getState().queue.length ? "next" : "find"));
   const isTypingRef = useRef(false);
   const typingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [input, setInput] = useState("");
+  const [isSpoiler, setIsSpoiler] = useState(false);
+  const [autoReveal, setAutoReveal] = useState(false);
+  const [momentNote, setMomentNote] = useState("");
+  const [playbackSnapshot, setPlaybackSnapshot] = useState<ReturnType<typeof getPlaybackContext>>(null);
+  useEffect(() => {
+    if (!messages.some((m) => m.isSpoiler && m.autoReveal)) return;
+    const update = () => setPlaybackSnapshot(getPlaybackContext());
+    const timer = setInterval(update, 1000);
+    return () => clearInterval(timer);
+  }, [messages, getPlaybackContext]);
   const [isPinnedToBottom, setIsPinnedToBottom] = useState(true);
   const listRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -157,8 +171,10 @@ export default function ChatPanel({
     e.preventDefault();
     const content = input.trim();
     if (!content) return;
-    sendMessage(roomId, currentUser.id, currentUser.name, content.slice(0, 1000));
+    sendMessage(roomId, currentUser.id, currentUser.name, content.slice(0, 1000), isSpoiler, isSpoiler && autoReveal);
     setInput("");
+    setIsSpoiler(false);
+    setAutoReveal(false);
     stopTyping();
   };
 
@@ -263,6 +279,7 @@ export default function ChatPanel({
         <div className={`flex rounded-lg bg-white/[0.04] p-0.5 ${embedded ? "flex-1" : ""}`} role="tablist">
           {([
             { id: "chat", label: "Chat", icon: MessageSquare, show: true },
+            { id: "moments", label: "Moments", icon: Bookmark, show: true },
             { id: "queue", label: queue.length ? `Queue · ${queue.length}` : "Queue", icon: ListVideo, show: true },
             { id: "people", label: `${people.length}`, icon: Users, show: true },
             { id: "cameras", label: `${camerasTab?.count ?? 0}`, icon: Video, show: !!camerasTab },
@@ -390,6 +407,9 @@ export default function ChatPanel({
                     isMe={msg.userId === currentUser.id}
                     isHostUser={msg.userId === hostId}
                     mentionsMe={msg.userId !== currentUser.id && mentionsUser(msg.content, currentUser.name)}
+                    autoRevealNow={!!(msg.isSpoiler && msg.autoReveal && msg.videoUrl && msg.videoTime !== null && msg.videoTime !== undefined &&
+                      msg.playbackSessionId && playbackSnapshot?.sessionId === msg.playbackSessionId &&
+                      playbackSnapshot.url === msg.videoUrl && playbackSnapshot.time >= msg.videoTime)}
                     onDelete={
                       msg.userId === currentUser.id || canModerate
                         ? () => socket?.emit("delete_message", { roomId, messageId: msg.id })
@@ -482,11 +502,55 @@ export default function ChatPanel({
                 <Clock size={16} />
               </button>
             </div>
+            <button type="button" onClick={() => { setIsSpoiler((value) => !value); setAutoReveal(false); }}
+              aria-pressed={isSpoiler} aria-label={isSpoiler ? "Disable spoiler shield" : "Mark message as spoiler"}
+              title={isSpoiler ? "Spoiler on" : "Mark as spoiler"}
+              className={`h-10 w-10 shrink-0 rounded-xl border p-2 ${isSpoiler ? "border-amber-400/50 bg-amber-400/15 text-amber-200" : "border-white/10 text-slate-400"}`}>
+              <Shield size={16} />
+            </button>
             <button type="submit" disabled={!input.trim()} className="btn-primary h-10 w-10 shrink-0 p-0" aria-label="Send message">
               <SendHorizonal size={16} />
             </button>
           </form>
+          {isSpoiler && <label className="flex items-center gap-2 px-3 pb-2 text-xs text-slate-300">
+            <input type="checkbox" checked={autoReveal} disabled={!getPlaybackContext()}
+              onChange={(e) => setAutoReveal(e.target.checked)} className="accent-indigo-500" />
+            Reveal automatically at this movie moment
+          </label>}
         </>
+      ) : tab === "moments" ? (
+        <div className="flex min-h-0 flex-1 flex-col">
+          <form className="border-b border-white/5 p-3" onSubmit={(e) => {
+            e.preventDefault();
+            if (!socket?.connected || !getPlaybackContext()) return;
+            socket.emit("save_moment", { roomId, requestId: crypto.randomUUID(), note: momentNote.trim() });
+            setMomentNote("");
+          }}>
+            <label htmlFor="moment-note" className="mb-1 block text-xs text-slate-300">Save the current movie moment</label>
+            <input id="moment-note" value={momentNote} onChange={(e) => setMomentNote(e.target.value)} maxLength={280}
+              placeholder="Optional note" className="input w-full text-sm" />
+            <button type="submit" disabled={!socket?.connected || !getPlaybackContext()} className="btn-primary mt-2 w-full justify-center text-xs">
+              <Bookmark size={14} /> Save moment
+            </button>
+          </form>
+          <div className="min-h-0 flex-1 space-y-2 overflow-y-auto p-3">
+            {moments.length === 0 ? <p className="text-center text-sm text-slate-500">No moments saved yet.</p> :
+              [...moments].reverse().map((moment) => {
+                const current = getPlaybackContext();
+                const canSeek = isHost && !breakState && current?.url === moment.videoUrl && current.sessionId === moment.playbackSessionId;
+                return <div key={moment.id} className="rounded-xl border border-white/10 bg-white/[0.03] p-3 text-sm">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="truncate text-xs font-medium text-slate-300">{describeUrl(moment.videoUrl).title}</span>
+                    {canSeek ? <button type="button" onClick={() => onSeekMoment(moment)} className="font-mono text-indigo-300 hover:text-indigo-200" aria-label={`Seek to ${formatClock(moment.videoTime)}`}>
+                      {formatClock(moment.videoTime)}
+                    </button> : <span className="font-mono text-slate-400">{formatClock(moment.videoTime)}</span>}
+                  </div>
+                  {moment.note && <p className="mt-1 whitespace-pre-wrap break-words text-slate-200">{moment.note}</p>}
+                  <p className="mt-1 text-[11px] text-slate-500">{moment.userName} · {timeAgo(moment.createdAt)}{!canSeek ? " · view only" : ""}</p>
+                </div>;
+              })}
+          </div>
+        </div>
       ) : tab === "queue" ? (
         <div className="flex flex-1 flex-col overflow-hidden">
           <div className="flex gap-1 border-b border-white/5 p-2" role="tablist" aria-label="Queue views">
@@ -721,16 +785,19 @@ export default function ChatPanel({
 }
 
 function ChatMessage({
-  msg, prev, isMe, isHostUser, mentionsMe, onDelete, render,
+  msg, prev, isMe, isHostUser, mentionsMe, autoRevealNow, onDelete, render,
 }: {
   msg: Message;
   prev?: Message;
   isMe: boolean;
   isHostUser: boolean;
   mentionsMe: boolean;
+  autoRevealNow: boolean;
   onDelete?: () => void;
   render: (content: string) => React.ReactNode;
 }) {
+  const [revealed, setRevealed] = useState(false);
+  const hidden = msg.isSpoiler && !revealed && !autoRevealNow;
   const grouped = !!prev && prev.userId === msg.userId && new Date(msg.createdAt).getTime() - new Date(prev.createdAt).getTime() < GROUP_WINDOW_MS;
 
   return (
@@ -755,7 +822,7 @@ function ChatMessage({
             }`}
             title={formatTime(msg.createdAt)}
           >
-            {render(msg.content)}
+            {hidden ? <button type="button" onClick={() => setRevealed(true)} className="font-semibold text-amber-200 underline underline-offset-2" aria-label="Reveal spoiler message">Reveal spoiler</button> : render(msg.content)}
           </div>
           {onDelete && (
             <button

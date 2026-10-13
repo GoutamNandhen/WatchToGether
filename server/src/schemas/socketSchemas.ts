@@ -17,6 +17,14 @@ export const sendMessageSchema = z.object({
   userId: z.string().uuid(),
   userName: z.string().min(1).max(100),
   content: z.string().min(1).max(1000), // Max 1000 chars for chat
+  isSpoiler: z.boolean().optional(),
+  autoReveal: z.boolean().optional(),
+}).refine((p) => !p.autoReveal || p.isSpoiler, "Auto-reveal requires a spoiler");
+
+export const saveMomentSchema = z.object({
+  roomId: z.string().uuid(),
+  requestId: z.string().uuid(),
+  note: z.string().trim().max(280).optional(),
 });
 
 export const roomTimeSchema = z.object({

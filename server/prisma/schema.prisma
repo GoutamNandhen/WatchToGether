@@ -23,6 +23,7 @@ model User {
   participants  Participant[]
   coHostedRooms RoomCoHost[]
   messages      Message[]
+  cinemaMoments CinemaMoment[]
   roomHistory   RoomHistoryEntry[]
 
   friends       Friend[]      @relation("UserFriends")
@@ -59,6 +60,7 @@ model Room {
   participants    Participant[]
   coHosts         RoomCoHost[]
   messages        Message[]
+  cinemaMoments   CinemaMoment[]
   historyEntries  RoomHistoryEntry[]
   queueItems      RoomQueueItem[]
   bans            RoomBan[]
@@ -215,11 +217,33 @@ model Message {
   /// What was playing when the message was sent, for chat replays.
   videoUrl      String?
   videoTime     Float?
+  playbackSessionId String?
+  isSpoiler     Boolean       @default(false)
+  autoReveal    Boolean       @default(false)
   
   user          User          @relation(fields: [userId], references: [id])
   room          Room          @relation(fields: [roomId], references: [id], onDelete: Cascade)
 
   @@index([roomId, videoUrl])
+}
+
+model CinemaMoment {
+  id                String   @id @default(uuid())
+  requestId         String
+  roomId            String
+  userId            String
+  videoUrl          String
+  videoTime         Int
+  playbackSessionId String
+  note              String?
+  createdAt         DateTime @default(now())
+
+  room              Room     @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, requestId])
+  @@unique([roomId, userId, playbackSessionId, videoTime])
+  @@index([roomId, createdAt])
 }
 
 model Friend {

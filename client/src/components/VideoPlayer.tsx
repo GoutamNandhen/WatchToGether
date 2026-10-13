@@ -12,6 +12,7 @@ import { toast } from "../store/useToastStore";
 export interface VideoPlayerRef {
   seekTo: (time: number) => void;
   getCurrentTime: () => number;
+  getUrl: () => string;
 }
 
 interface VideoPlayerProps {
@@ -161,7 +162,8 @@ const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(({ roomId, isFu
         return playerRef.current.getCurrentTime();
       }
       return 0;
-    }
+    },
+    getUrl: () => urlRef.current,
   }));
 
   const { settings, activeSpeakers, hostAnnouncementActive, hostSocketId } = useAudioStore();

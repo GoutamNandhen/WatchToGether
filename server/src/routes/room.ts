@@ -1,5 +1,5 @@
 import { Router, Request } from "express";
-import { createRoom, getRooms, getRoomById, deleteRoom, inviteRoom, joinRoom, getRoomHistory, removeRoomHistory, endRoom, updateRoom, getUpcomingRooms, getRoomBans, unbanUser, inviteGroup, listReplays, getReplay } from "../controllers/room";
+import { createRoom, getRooms, getRoomById, deleteRoom, inviteRoom, joinRoom, getRoomHistory, removeRoomHistory, endRoom, updateRoom, getUpcomingRooms, getRoomBans, unbanUser, inviteGroup, listReplays, getReplay, listCinemaMoments } from "../controllers/room";
 import { authenticate, AuthRequest } from "../middlewares/authMiddleware";
 import { rateLimit } from "../middlewares/rateLimit";
 import { createInviteLink, listInviteLinks, revokeInviteLink } from "../controllers/inviteLinks";
@@ -38,6 +38,7 @@ router.post("/:id/end", authenticate, endRoom);
 router.get("/:id/bans", authenticate, getRoomBans);
 router.get("/:id/replays", authenticate, listReplays);
 router.get("/:id/replay", authenticate, getReplay);
+router.get("/:id/moments", authenticate, listCinemaMoments);
 router.get("/:id/invite-links", authenticate, listInviteLinks);
 router.post("/:id/invite-links", authenticate, inviteLimit, createInviteLink);
 router.delete("/:id/invite-links/:linkId", authenticate, revokeInviteLink);

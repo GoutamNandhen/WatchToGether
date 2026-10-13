@@ -10,6 +10,23 @@ export interface Message {
   userName: string;
   content: string;
   createdAt: string;
+  videoUrl?: string | null;
+  videoTime?: number | null;
+  playbackSessionId?: string | null;
+  isSpoiler?: boolean;
+  autoReveal?: boolean;
+}
+
+export interface CinemaMoment {
+  id: string;
+  roomId: string;
+  userId: string;
+  userName: string;
+  videoUrl: string;
+  videoTime: number;
+  playbackSessionId: string;
+  note: string | null;
+  createdAt: string;
 }
 
 export interface RoomSession {
@@ -125,6 +142,8 @@ const MAX_MESSAGES = 300;
 interface SocketState {
   socket: Socket | null;
   messages: Message[];
+  moments: CinemaMoment[];
+  playbackSession: { url: string; sessionId: string } | null;
   participants: Record<string, Participant>;
   reactions: Reaction[];
   unreadCount: number;
@@ -154,7 +173,7 @@ interface SocketState {
   disconnect: () => void;
   joinRoom: (roomId: string, userId: string, userName: string, password?: string) => void;
   leaveRoom: (roomId: string, userId: string, userName: string) => void;
-  sendMessage: (roomId: string, userId: string, userName: string, content: string) => void;
+  sendMessage: (roomId: string, userId: string, userName: string, content: string, isSpoiler?: boolean, autoReveal?: boolean) => void;
   sendReaction: (roomId: string, emoji: string) => void;
   setTyping: (roomId: string, isTyping: boolean) => void;
   addMessage: (message: Message) => void;
@@ -182,6 +201,8 @@ const appendMessage = (messages: Message[], message: Message) => {
 export const useSocketStore = create<SocketState>((set, get) => ({
   socket: null,
   messages: [],
+  moments: [],
+  playbackSession: null,
   participants: {},
   reactions: [],
   unreadCount: 0,
@@ -257,7 +278,7 @@ export const useSocketStore = create<SocketState>((set, get) => ({
 
       socket.on('receive_message', (message: Message) => {
         const me = useAuthStore.getState().user;
-        const isMention = !!me && message.userId !== me.id && mentionsUser(message.content, me.name);
+        const isMention = !message.isSpoiler && !!me && message.userId !== me.id && mentionsUser(message.content, me.name);
         if (isMention) {
           playMentionChime();
           if (document.hidden && 'Notification' in window && Notification.permission === 'granted') {
@@ -280,6 +301,18 @@ export const useSocketStore = create<SocketState>((set, get) => ({
       // The server replays recent messages on every (re)join, so replace rather than append.
       socket.on('chat_history', (history: Message[]) => {
         set({ messages: history.slice(-MAX_MESSAGES) });
+      });
+      socket.on('moments_history', (moments: CinemaMoment[]) => set((state) => ({
+        moments: [...moments, ...state.moments.filter((m) => !moments.some((item) => item.id === m.id))].slice(-100),
+      })));
+      socket.on('moment_saved', (moment: CinemaMoment) => set((state) => ({
+        moments: state.moments.some((m) => m.id === moment.id) ? state.moments : [...state.moments, moment].slice(-100),
+      })));
+      socket.on('playback_session', (session: { url: string; sessionId: string }) => {
+        if (session?.sessionId) set({ playbackSession: session });
+      });
+      socket.on('sync_response', (playback: { url: string; sessionId: string } | null) => {
+        if (playback?.sessionId) set({ playbackSession: { url: playback.url, sessionId: playback.sessionId } });
       });
 
       socket.on('chat_rate_limited', ({ message }: { message: string }) => {
@@ -382,7 +415,7 @@ export const useSocketStore = create<SocketState>((set, get) => ({
 
       socket.on('kicked', ({ roomId }: { roomId: string }) => {
         if (get().currentRoomSession?.roomId === roomId) {
-          set({ exitReason: 'kicked', currentRoomSession: null, breakState: null, focusMode: false });
+          set({ exitReason: 'kicked', currentRoomSession: null, breakState: null, focusMode: false, moments: [], playbackSession: null });
         }
       });
 
@@ -400,7 +433,7 @@ export const useSocketStore = create<SocketState>((set, get) => ({
 
       socket.on('room_ended', ({ roomId }: { roomId: string }) => {
         if (get().currentRoomSession?.roomId === roomId) {
-          set({ endedRoomId: roomId, currentRoomSession: null, breakState: null, focusMode: false });
+          set({ endedRoomId: roomId, currentRoomSession: null, breakState: null, focusMode: false, moments: [], playbackSession: null });
         }
       });
 
@@ -421,7 +454,9 @@ export const useSocketStore = create<SocketState>((set, get) => ({
           errorMsg.includes("Subtitle file") ||
           errorMsg.includes("countdown") ||
           errorMsg.includes("poll") ||
-          errorMsg.includes("mute a co-host")
+          errorMsg.includes("mute a co-host") ||
+          errorMsg.includes("moment") ||
+          errorMsg.includes("spoiler message")
         ) {
           toast.error(errorMsg);
         } else if (errorMsg.includes("Too many password attempts")) {
@@ -455,13 +490,15 @@ export const useSocketStore = create<SocketState>((set, get) => ({
         participants: {},
         breakState: null,
         focusMode: false,
+        moments: [],
+        playbackSession: null,
       });
     }
   },
 
   joinRoom: (roomId, userId, userName, password) => {
     const session: RoomSession = { roomId, userId, userName, password };
-    set({ currentRoomSession: session, reconnectError: null, roomAccessError: null, endedRoomId: null, exitReason: null, breakState: null, focusMode: false });
+    set({ currentRoomSession: session, reconnectError: null, roomAccessError: null, endedRoomId: null, exitReason: null, breakState: null, focusMode: false, moments: [], playbackSession: null });
     const { socket } = get();
     if (socket && socket.connected) {
       socket.emit('join_room', session);
@@ -469,17 +506,17 @@ export const useSocketStore = create<SocketState>((set, get) => ({
   },
 
   leaveRoom: (roomId, userId, userName) => {
-    set({ currentRoomSession: null, reconnectError: null, roomAccessError: null, participants: {}, reactions: [], queue: [], typingUsers: {}, roomInfo: null, subtitles: null, skipVotes: { count: 0, needed: 1, voters: [] }, viewerSync: {}, recentlyPlayed: [], countdownEndsAt: null, breakState: null, focusMode: false, unreadMentions: 0, poll: null, myPollVote: null, chatSettings: { slowModeSeconds: 0, muted: [] } });
+    set({ currentRoomSession: null, reconnectError: null, roomAccessError: null, participants: {}, reactions: [], queue: [], typingUsers: {}, roomInfo: null, subtitles: null, skipVotes: { count: 0, needed: 1, voters: [] }, viewerSync: {}, recentlyPlayed: [], countdownEndsAt: null, breakState: null, focusMode: false, moments: [], playbackSession: null, unreadMentions: 0, poll: null, myPollVote: null, chatSettings: { slowModeSeconds: 0, muted: [] } });
     const { socket } = get();
     if (socket) {
       socket.emit('leave_room', { roomId, userId, userName });
     }
   },
 
-  sendMessage: (roomId, userId, userName, content) => {
+  sendMessage: (roomId, userId, userName, content, isSpoiler = false, autoReveal = false) => {
     const { socket } = get();
     if (socket) {
-      socket.emit('send_message', { roomId, userId, userName, content });
+      socket.emit('send_message', { roomId, userId, userName, content, isSpoiler, autoReveal });
     }
   },
 
