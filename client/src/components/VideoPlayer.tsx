@@ -376,6 +376,12 @@ const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(({ roomId, isFu
     else if (typeof internalPlayer?.pause === 'function') internalPlayer.pause();
   };
 
+  useEffect(() => {
+    if (!breakState) return;
+    const iframe = playerRef.current?.getInternalPlayer()?.getIframe?.();
+    if (iframe instanceof HTMLIFrameElement && document.activeElement === iframe) iframe.blur();
+  }, [breakState]);
+
   // Everyone except the room clock reports how well they're keeping up, so hosts can see
   // who is buffering or drifting before pressing play.
   const sendSyncReport = useCallback(() => {
@@ -749,7 +755,7 @@ const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(({ roomId, isFu
         </>
       )}
 
-      <div className={`flex-1 overflow-hidden relative bg-black flex items-center justify-center transition-all duration-300 ${isFullscreen || compact ? '' : 'rounded-2xl shadow-2xl ring-1 ring-white/10'}`}>
+      <div inert={!!breakState} className={`flex-1 overflow-hidden relative bg-black flex items-center justify-center transition-all duration-300 ${isFullscreen || compact ? '' : 'rounded-2xl shadow-2xl ring-1 ring-white/10'}`}>
         {url ? (
           <Player
             key={url}
@@ -788,6 +794,7 @@ const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(({ roomId, isFu
           <SubtitleOverlay vtt={subtitles.vtt} getCurrentTime={readCurrentTime} isFullscreen={isFullscreen} />
         )}
       </div>
+      {breakState && url && <div className="absolute inset-0 z-20 cursor-not-allowed pointer-events-auto touch-none" aria-hidden="true" />}
     </div>
   );
 });
