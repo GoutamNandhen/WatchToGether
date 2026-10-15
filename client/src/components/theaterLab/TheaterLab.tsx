@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useRef, useState, type ChangeEvent, type PointerEvent } from "react";
-import { ArrowLeft, Compass, Expand, Glasses, Gauge, Info, Maximize2, Pause, Play, RotateCcw, Upload, Volume2, VolumeX, X } from "lucide-react";
+import { ArrowLeft, Armchair, Bookmark, Compass, Expand, Glasses, Gauge, Info, Maximize2, MessageSquare, Pause, Play, RotateCcw, Settings2, Upload, Volume2, VolumeX, X } from "lucide-react";
 import { Link } from "react-router-dom";
 import { CinemaRenderer, type TheaterQuality, type TheaterSeat } from "./CinemaRenderer";
 import "./theaterLab.css";
 
 type MotionState = "unavailable" | "available" | "requesting" | "waiting" | "active" | "denied" | "needs-https";
 type TextureState = "placeholder" | "waiting" | "ready" | "working" | "failed";
+type TheaterPanel = "chat" | "seats" | "moments" | "settings";
 
 const detectDevice = () => {
   if (typeof window === "undefined") return "Unknown";
@@ -21,6 +22,7 @@ export default function TheaterLab() {
   const sceneRef = useRef<CinemaRenderer | null>(null);
   const dragRef = useRef<{ x: number; y: number } | null>(null);
   const motionSeenRef = useRef(false);
+  const hideTimerRef = useRef<number | null>(null);
   const [device] = useState(detectDevice);
   const [webgl, setWebgl] = useState<"checking" | "available" | "unavailable">("checking");
   const [quality, setQuality] = useState<TheaterQuality>("medium");
@@ -40,6 +42,21 @@ export default function TheaterLab() {
   const [volume, setVolume] = useState(0.7);
   const [notice, setNotice] = useState<string | null>(null);
   const [showDiagnostics, setShowDiagnostics] = useState(false);
+  const [activePanel, setActivePanel] = useState<TheaterPanel | null>(() => typeof window !== "undefined" && window.innerWidth > 900 ? "chat" : null);
+  const [controlsVisible, setControlsVisible] = useState(true);
+
+  const revealControls = useCallback(() => {
+    setControlsVisible(true);
+    if (hideTimerRef.current !== null) window.clearTimeout(hideTimerRef.current);
+    if (playing) hideTimerRef.current = window.setTimeout(() => {
+      if (!stageRef.current?.querySelector(".t3-glass-menu:is(:hover, :focus-within), .t3-floating-panel:is(:hover, :focus-within), .t3-bottom:is(:hover, :focus-within)")) setControlsVisible(false);
+    }, 4500);
+  }, [playing]);
+
+  useEffect(() => {
+    revealControls();
+    return () => { if (hideTimerRef.current !== null) window.clearTimeout(hideTimerRef.current); };
+  }, [revealControls]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -257,7 +274,7 @@ export default function TheaterLab() {
       </header>
 
       <main className="t3-main">
-        <div className="t3-stage" ref={stageRef}>
+        <div className={`t3-stage${controlsVisible ? "" : " t3-idle"}`} ref={stageRef} onPointerMove={revealControls} onPointerDown={revealControls} onBlurCapture={revealControls}>
           <div className="t3-viewport" onPointerDown={pointerDown} onPointerMove={pointerMove} onPointerUp={() => { dragRef.current = null; }} onPointerCancel={() => { dragRef.current = null; }}>
             <canvas ref={canvasRef} aria-label="Interactive 3D cinema" />
             {webgl === "unavailable" && <div className="t3-fallback">
@@ -281,6 +298,23 @@ export default function TheaterLab() {
           {!stereo && <>
             <div className="t3-stage-label"><span className="t3-indicator" /> CINEMA 01 <i /> {seat.toUpperCase()} VIEW</div>
             <div className="t3-stage-hint">DRAG TO LOOK <i /> SEAT KEYS 1–3</div>
+            <nav className="t3-glass-menu" aria-label="Theater prototype sections" onPointerLeave={revealControls}>
+              <div className="t3-menu-brand"><span className="t3-menu-mark">W</span><span>WatchToGether<small>VIRTUAL THEATER · PREVIEW</small></span></div>
+              {([
+                ["chat", MessageSquare, "Chat"],
+                ["seats", Armchair, "Seats"],
+                ["moments", Bookmark, "Moments"],
+                ["settings", Settings2, "Settings"],
+              ] as const).map(([panel, Icon, label]) => <button type="button" key={panel} className={activePanel === panel ? "selected" : ""} aria-pressed={activePanel === panel} onClick={() => setActivePanel(activePanel === panel ? null : panel)}><Icon size={17} />{label}</button>)}
+              <Link to="/" className="t3-menu-exit"><ArrowLeft size={16} /> Classic Mode</Link>
+            </nav>
+            {activePanel && <aside className="t3-floating-panel" aria-label={`${activePanel} panel`} onPointerLeave={revealControls}>
+              <div className="t3-panel-heading"><div><span>{activePanel === "chat" ? "CONVERSATION" : activePanel === "seats" ? "YOUR VIEW" : activePanel === "moments" ? "HIGHLIGHTS" : "PREFERENCES"}</span><h2>{activePanel.charAt(0).toUpperCase() + activePanel.slice(1)}</h2></div><button type="button" onClick={() => setActivePanel(null)} aria-label="Close panel"><X size={16} /></button></div>
+              {activePanel === "chat" && <><div className="t3-demo-badge">DEMO LAYOUT · NO LIVE ROOM</div><div className="t3-demo-presence"><span className="t3-presence-dot" /> Mina <span className="t3-presence-dot second" /> Alex <span className="t3-presence-dot third" /> Chris</div><div className="t3-demo-message"><strong>Mina <small>sample</small></strong><p>This scene looks beautiful ✨</p></div><div className="t3-demo-message"><strong>Alex <small>sample</small></strong><p>Best seats in the house.</p></div><p className="t3-panel-note">Chat is a visual preview. Nothing here is sent or saved.</p></>}
+              {activePanel === "seats" && <><p className="t3-panel-intro">Choose a comfortable viewpoint. Drag the scene to look around.</p><div className="t3-panel-seat-list">{(["gallery", "center", "front"] as const).map((value) => <button type="button" key={value} className={seat === value ? "selected" : ""} onClick={() => pickSeat(value)}><Armchair size={17} /><span>{value === "center" ? "Center · recommended" : value === "gallery" ? "Gallery · wide view" : "Front · immersive"}</span>{seat === value && <span className="t3-seat-active">SELECTED</span>}</button>)}</div><button type="button" className="t3-panel-action" onClick={() => sceneRef.current?.recenter()}><RotateCcw size={14} /> Recenter view</button></>}
+              {activePanel === "moments" && <><div className="t3-demo-badge">DEMO LAYOUT · NO LIVE ROOM</div><p className="t3-panel-intro">Saved Cinema Moments will appear here when Virtual Theater joins a shared WatchToGether room.</p><p className="t3-panel-note">This standalone preview does not load or save moments.</p></>}
+              {activePanel === "settings" && <><div className="t3-panel-setting"><span>Render quality</span><div className="t3-segment">{(["low", "medium", "high"] as const).map((value) => <button type="button" key={value} className={quality === value ? "selected" : ""} onClick={() => { setQuality(value); sceneRef.current?.setQuality(value); }}>{value}</button>)}</div></div><div className="t3-panel-setting"><span>Head tracking</span><button type="button" className="t3-panel-action" onClick={enableMotion} disabled={motionState === "unavailable" || motionState === "requesting"}>{motionEnabled ? "Disable motion" : "Enable motion"}</button></div><div className="t3-panel-setting"><span>Stereo strength · {Math.round(eyeSep * 1000)} mm</span><input type="range" min={0.035} max={0.095} step={0.005} value={eyeSep} onChange={(event) => { const value = Number(event.target.value); setEyeSep(value); sceneRef.current?.setEyeSeparation(value); }} aria-label="Stereo eye separation" /></div><button type="button" className="t3-panel-action" onClick={() => sceneRef.current?.recenter()}><RotateCcw size={14} /> Recenter</button></>}
+            </aside>}
             {showDiagnostics && <aside className="t3-diagnostics" aria-label="Theater diagnostics">
               <div className="t3-diagnostics-title"><Gauge size={14} /> LIVE DIAGNOSTICS <button type="button" onClick={() => setShowDiagnostics(false)} aria-label="Hide diagnostics"><X size={13} /></button></div>
               <dl>
@@ -306,27 +340,22 @@ export default function TheaterLab() {
             </div>)}
           </div>}
 
-          {!stereo && <div className="t3-bottom">
+          {!stereo && <div className="t3-bottom" onPointerLeave={revealControls}>
             <div className="t3-controls">
+              <div className="t3-player-meta"><strong>{videoName || "A private screening"}</strong><small>{videoName ? "LOCAL FILE" : "THEATER PREVIEW"}</small></div>
               <input ref={fileInputRef} type="file" accept="video/mp4,.mp4" onChange={chooseFile} className="sr-only" aria-label="Choose local MP4" />
               <button type="button" className="t3-primary" onClick={() => fileInputRef.current?.click()}><Upload size={15} /> <span>Local MP4</span></button>
               <button type="button" className="t3-icon" onClick={playVideo} disabled={!videoUrl} aria-label={playing ? "Pause video" : "Play video"}>{playing ? <Pause size={18} /> : <Play size={18} />}</button>
               <label className="t3-volume" aria-label="Video volume">{volume === 0 ? <VolumeX size={16} /> : <Volume2 size={16} />}<input type="range" min={0} max={1} step={0.01} value={volume} onChange={(event) => { const value = Number(event.target.value); setVolume(value); if (videoRef.current) videoRef.current.volume = value; }} /></label>
               <span className="t3-divider" />
-              <div className="t3-seat-picker" aria-label="Seat position"><Compass size={15} />{(["gallery", "center", "front"] as const).map((value) => <button type="button" key={value} className={seat === value ? "selected" : ""} onClick={() => pickSeat(value)}>{value}</button>)}</div>
+              <button type="button" className="t3-icon" onClick={() => setActivePanel(activePanel === "seats" ? null : "seats")} aria-label="Choose seat" title="Choose seat"><Compass size={17} /></button>
               <button type="button" className="t3-icon" onClick={toggleFullscreen} title="Fullscreen" aria-label={fullscreen ? "Exit fullscreen" : "Enter fullscreen"}>{fullscreen ? <Expand size={17} /> : <Maximize2 size={17} />}</button>
               <button type="button" className="t3-vr-button" onClick={enterStereo} disabled={webgl !== "available"}><Glasses size={17} /> <span>Phone VR</span></button>
             </div>
           </div>}
+          {!stereo && !controlsVisible && <button type="button" className="t3-reveal-controls" onClick={revealControls}>Show controls</button>}
         </div>
 
-        {!stereo && <div className="t3-status"><span className="t3-status-kicker">YOUR PRIVATE SCREENING</span><strong>{videoName || "A new perspective on movie night"}</strong><small>{videoName ? "Local file · never uploaded" : "A room-independent 3D feasibility study"}</small></div>}
-
-        {!stereo && <div className="t3-options">
-          <div className="t3-options-group"><span>RENDER QUALITY</span><div className="t3-segment">{(["low", "medium", "high"] as const).map((value) => <button type="button" key={value} className={quality === value ? "selected" : ""} onClick={() => { setQuality(value); sceneRef.current?.setQuality(value); }}>{value}</button>)}</div></div>
-          <div className="t3-options-group"><span>HEAD TRACKING</span><button type="button" className="t3-subtle-button" onClick={enableMotion} disabled={motionState === "unavailable" || motionState === "requesting"}>{motionEnabled ? "Disable motion" : "Enable motion"}</button><button type="button" className="t3-subtle-button" onClick={() => sceneRef.current?.recenter()}><RotateCcw size={14} /> Recenter</button></div>
-          <div className="t3-options-group"><span>STEREO STRENGTH</span><input type="range" min={0.035} max={0.095} step={0.005} value={eyeSep} onChange={(event) => { const value = Number(event.target.value); setEyeSep(value); sceneRef.current?.setEyeSeparation(value); }} aria-label="Stereo eye separation" /><small>{Math.round(eyeSep * 1000)} mm</small></div>
-        </div>}
         {notice && !stereo && <div className="t3-notice" role="status">{notice}<button type="button" onClick={() => setNotice(null)} aria-label="Dismiss notice"><X size={14} /></button></div>}
         {!stereo && <p className="t3-footnote">LOCAL PROTOTYPE <span>·</span> No room connection, movie service, or DRM playback <span>·</span> Motion controls require browser and device support</p>}
       </main>

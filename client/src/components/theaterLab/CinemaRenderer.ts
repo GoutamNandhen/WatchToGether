@@ -13,9 +13,9 @@ const SCREEN_Y = 5.05;
 const SCREEN_Z = -12;
 
 const SEATS: Record<TheaterSeat, THREE.Vector3> = {
-  gallery: new THREE.Vector3(2, 1.8, 11),
-  center: new THREE.Vector3(2, 1.55, 4.4),
-  front: new THREE.Vector3(2, 1.45, -0.6),
+  gallery: new THREE.Vector3(2.2, 3.95, 10.25),
+  center: new THREE.Vector3(2.2, 2.9, 4.4),
+  front: new THREE.Vector3(2.2, 1.95, -1.25),
 };
 
 /** Owns only the experimental scene. It never reads or writes room state. */
@@ -28,6 +28,7 @@ export class CinemaRenderer {
   private readonly renderer: THREE.WebGLRenderer;
   private readonly unitBox = new THREE.BoxGeometry(1, 1, 1);
   private readonly roundedBox = new RoundedBoxGeometry(1, 1, 1, 2, 0.09);
+  private readonly reclinerBack = this.createReclinerBack();
   private readonly placeholderCanvas = document.createElement("canvas");
   private readonly artworkImage = new Image();
   private artworkReady = false;
@@ -82,7 +83,7 @@ export class CinemaRenderer {
     });
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.38;
+    this.renderer.toneMappingExposure = 1.5;
     this.scene.background = new THREE.Color("#110f12");
     this.scene.fog = new THREE.FogExp2("#110f12", 0.006);
     this.camera.position.copy(SEATS.center);
@@ -131,6 +132,23 @@ export class CinemaRenderer {
     return material;
   }
 
+  private createReclinerBack() {
+    const profile = new THREE.Shape();
+    profile.moveTo(-0.42, -0.5);
+    profile.quadraticCurveTo(-0.53, -0.49, -0.54, -0.36);
+    profile.lineTo(-0.51, 0.27);
+    profile.quadraticCurveTo(-0.5, 0.48, -0.31, 0.5);
+    profile.quadraticCurveTo(0, 0.54, 0.31, 0.5);
+    profile.quadraticCurveTo(0.5, 0.48, 0.51, 0.27);
+    profile.lineTo(0.54, -0.36);
+    profile.quadraticCurveTo(0.53, -0.49, 0.42, -0.5);
+    profile.closePath();
+    const geometry = new THREE.ExtrudeGeometry(profile, { depth: 0.22, steps: 1, bevelEnabled: true, bevelThickness: 0.055, bevelSize: 0.045, bevelSegments: 2, curveSegments: 4 });
+    geometry.translate(0, 0, -0.11);
+    geometry.computeVertexNormals();
+    return geometry;
+  }
+
   private addBox(x: number, y: number, z: number, w: number, h: number, d: number, material: THREE.Material) {
     const mesh = new THREE.Mesh(this.unitBox, material);
     mesh.position.set(x, y, z);
@@ -139,12 +157,13 @@ export class CinemaRenderer {
     return mesh;
   }
 
-  private addInstances(material: THREE.Material, boxes: Array<[number, number, number, number, number, number]>, geometry: THREE.BufferGeometry = this.unitBox) {
+  private addInstances(material: THREE.Material, boxes: Array<[number, number, number, number, number, number]>, geometry: THREE.BufferGeometry = this.unitBox, tilt = 0) {
     const mesh = new THREE.InstancedMesh(geometry, material, boxes.length);
     const instance = new THREE.Object3D();
     boxes.forEach(([x, y, z, w, h, d], index) => {
       instance.position.set(x, y, z);
       instance.scale.set(w, h, d);
+      instance.rotation.x = tilt;
       instance.updateMatrix();
       mesh.setMatrixAt(index, instance.matrix);
     });
@@ -153,15 +172,17 @@ export class CinemaRenderer {
   }
 
   private buildCinema() {
-    const floor = this.material("#292226", 0.05, 0.94);
+    const floor = this.material("#30292b", 0.08, 0.86);
     const riser = this.material("#211a1e", 0.05, 0.92);
     const wall = this.material("#292428", 0.04, 0.93);
-    const acoustic = this.material("#3a3034", 0.02, 1);
+    const acoustic = this.material("#40383b", 0.02, 0.96);
     const acousticInset = this.material("#211c22", 0.02, 1);
     const fabricSlat = this.material("#514148", 0.02, 1);
     const ceiling = this.material("#201d21", 0.05, 0.88);
-    const velvet = this.material("#713d48", 0.02, 0.96);
-    const seatCushion = this.material("#844b55", 0.02, 0.96);
+    const velvet = this.material("#562934", 0.01, 1);
+    const velvetAlternate = this.material("#67333c", 0.01, 1);
+    const seatCushion = this.material("#77414b", 0.01, 0.98);
+    const upholsterySeam = this.material("#a06668", 0, 1);
     const seatFrame = this.material("#242026", 0.18, 0.72);
     const bronze = this.material("#92734e", 0.58, 0.4);
     const darkBronze = this.material("#604b38", 0.45, 0.5);
@@ -229,12 +250,24 @@ export class CinemaRenderer {
     this.addBox(-9.3, 9.3, 1.4, 0.08, 0.08, 29, darkBronze);
     this.addBox(9.3, 9.3, 1.4, 0.08, 0.08, 29, darkBronze);
     this.addBox(0, 9.28, 1.4, 7.9, 0.06, 28.4, acousticInset);
+    for (const side of [-1, 1]) {
+      this.addBox(side * 10.42, 0.72, 1.4, 0.12, 0.16, 28, darkBronze);
+      this.addBox(side * 10.38, 0.85, 1.4, 0.04, 0.025, 28, lowLight);
+      this.addBox(side * 9.85, 9.34, 1.4, 0.06, 0.045, 28, goldLight);
+      this.addBox(side * 8.35, 4.9, -12.71, 0.18, 8.1, 0.15, bronze);
+      this.addBox(side * 8.33, 4.9, -12.6, 0.025, 7.8, 0.04, lowLight);
+    }
+    for (let bay = 0; bay < 6; bay++) {
+      const z = -9.5 + bay * 4.45;
+      this.addBox(0, 9.36, z, 16.8, 0.06, 3.15, ceiling);
+      this.addBox(0, 9.30, z + 1.56, 17, 0.035, 0.045, lowLight);
+    }
 
     const rowZ = [-1, 1.9, 4.8, 7.7, 10.6, 13.5];
     const seatX = [-8.6, -7, -5.4, -3.8, -2.2, 2.2, 3.8, 5.4, 7, 8.6];
     const seats: Array<[number, number, number]> = [];
     rowZ.forEach((z, row) => {
-      const rise = row * 0.115;
+      const rise = row * 0.5;
       this.addBox(0, rise / 2 - 0.015, z, 21.3, rise + 0.07, 2.82, riser);
       stepEdges.push([0, rise + 0.03, z - 1.39, 21.2, 0.035, 0.045]);
       for (const x of seatX) seats.push([x, z, rise]);
@@ -247,32 +280,37 @@ export class CinemaRenderer {
     this.addInstances(goldLight, aisleLamps);
     this.addBox(0, 0.015, 1.4, 2.14, 0.03, 28.5, floor);
 
-    // Each upholstered chair uses shared low-poly rounded geometry and seven instanced parts.
+    // Recliners share one bevelled silhouette and a handful of instanced upholstered parts.
     const frameParts: Array<[number, number, number, number, number, number]> = [];
     const backs: typeof frameParts = [];
+    const alternateBacks: typeof frameParts = [];
     const headrests: typeof frameParts = [];
     const cushions: typeof frameParts = [];
     const sideBolsters: typeof frameParts = [];
     const armrests: typeof frameParts = [];
     const piping: typeof frameParts = [];
-    seats.forEach(([x, z, rise]) => {
-      frameParts.push([x, rise + 0.42, z, 1.46, 0.74, 1.24]);
-      backs.push([x, rise + 1.21, z + 0.42, 1.35, 1.46, 0.38]);
-      headrests.push([x, rise + 1.78, z + 0.43, 1.15, 0.32, 0.42]);
-      cushions.push([x, rise + 0.85, z - 0.18, 1.26, 0.25, 0.94]);
+    const seams: typeof frameParts = [];
+    seats.forEach(([x, z, rise], index) => {
+      frameParts.push([x, rise + 0.38, z - 0.03, 1.42, 0.68, 1.32]);
+      (Math.floor(index / seatX.length) % 2 === 0 ? backs : alternateBacks).push([x, rise + 1.25, z + 0.43, 1.17, 1.28, 1]);
+      headrests.push([x, rise + 1.83, z + 0.50, 0.97, 0.26, 0.34]);
+      cushions.push([x, rise + 0.76, z - 0.22, 1.24, 0.25, 1.05]);
+      seams.push([x, rise + 0.77, z - 0.74, 0.78, 0.015, 0.018]);
       for (const side of [-1, 1]) {
-        sideBolsters.push([x + side * 0.61, rise + 1.21, z + 0.38, 0.15, 1.3, 0.42]);
-        armrests.push([x + side * 0.77, rise + 0.92, z - 0.06, 0.17, 0.3, 1.22]);
-        piping.push([x + side * 0.75, rise + 1.08, z - 0.05, 0.035, 0.035, 1.13]);
+        sideBolsters.push([x + side * 0.62, rise + 1.2, z + 0.36, 0.18, 1.17, 0.38]);
+        armrests.push([x + side * 0.78, rise + 0.85, z - 0.13, 0.24, 0.33, 1.32]);
+        piping.push([x + side * 0.78, rise + 1.02, z - 0.13, 0.17, 0.025, 1.19]);
       }
     });
     this.addInstances(seatFrame, frameParts, this.roundedBox);
-    this.addInstances(velvet, backs, this.roundedBox);
+    this.addInstances(velvet, backs, this.reclinerBack, 0.12);
+    this.addInstances(velvetAlternate, alternateBacks, this.reclinerBack, 0.12);
     this.addInstances(seatCushion, headrests, this.roundedBox);
     this.addInstances(seatCushion, cushions, this.roundedBox);
     this.addInstances(velvet, sideBolsters, this.roundedBox);
     this.addInstances(seatFrame, armrests, this.roundedBox);
     this.addInstances(bronze, piping);
+    this.addInstances(upholsterySeam, seams);
 
     // Static fills reveal upholstery and architecture; no shadow maps or post-processing.
     this.scene.add(new THREE.AmbientLight("#cbb8b2", 1.1));
@@ -505,6 +543,7 @@ export class CinemaRenderer {
     this.placeholderTexture.dispose();
     this.unitBox.dispose();
     this.roundedBox.dispose();
+    this.reclinerBack.dispose();
     this.geometries.forEach((geometry) => geometry.dispose());
     this.materials.forEach((material) => material.dispose());
     this.renderer.dispose();
