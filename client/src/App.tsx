@@ -1,4 +1,4 @@
-import { useEffect, type ReactNode } from "react";
+import { lazy, Suspense, useEffect, type ReactNode } from "react";
 import { BrowserRouter, Routes, Route, Navigate, useLocation } from "react-router-dom";
 import Home from "./pages/Home";
 import Login from "./pages/Login";
@@ -16,6 +16,11 @@ import Toaster from "./components/ui/Toaster";
 import { useAuthStore } from "./store/useAuthStore";
 import { useSocketStore } from "./store/useSocketStore";
 import api from "./lib/api";
+
+// Only local development and the branch-scoped Vercel preview include the lab.
+const TheaterLab = import.meta.env.DEV || import.meta.env.VITE_THEATER_LAB_PREVIEW === "true"
+  ? lazy(() => import("./components/theaterLab/TheaterLab"))
+  : null;
 
 function RequireAuth({ children }: { children: ReactNode }) {
   const user = useAuthStore((s) => s.user);
@@ -83,6 +88,7 @@ function App() {
           <Route path="/dashboard" element={<RequireAuth><Dashboard /></RequireAuth>} />
           <Route path="/room/:id" element={<RequireAuth><Room /></RequireAuth>} />
           <Route path="/room/:id/replay" element={<RequireAuth><Replay /></RequireAuth>} />
+          {TheaterLab && <Route path="/theater-lab" element={<Suspense fallback={<div className="p-8 text-center text-slate-400">Preparing the theater…</div>}><TheaterLab /></Suspense>} />}
           <Route path="/invite/:token" element={<RequireAuth><InviteAccept /></RequireAuth>} />
           <Route path="*" element={<NotFound />} />
         </Routes>
