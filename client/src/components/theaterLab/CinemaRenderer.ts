@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { RoundedBoxGeometry } from "three/addons/geometries/RoundedBoxGeometry.js";
+import cinemaScreenArtwork from "./cinema-screen.webp";
 
 export type TheaterQuality = "low" | "medium" | "high";
 export type TheaterSeat = "gallery" | "center" | "front";
@@ -28,6 +29,8 @@ export class CinemaRenderer {
   private readonly unitBox = new THREE.BoxGeometry(1, 1, 1);
   private readonly roundedBox = new RoundedBoxGeometry(1, 1, 1, 2, 0.09);
   private readonly placeholderCanvas = document.createElement("canvas");
+  private readonly artworkImage = new Image();
+  private artworkReady = false;
   private readonly placeholderTexture: THREE.CanvasTexture;
   private readonly screenMaterial: THREE.MeshBasicMaterial;
   private readonly screenMesh: THREE.Mesh;
@@ -87,8 +90,13 @@ export class CinemaRenderer {
     this.stereoCamera.aspect = 0.5;
     this.stereoCamera.eyeSep = 0.065;
 
-    this.placeholderCanvas.width = 768;
-    this.placeholderCanvas.height = 432;
+    this.placeholderCanvas.width = 1024;
+    this.placeholderCanvas.height = 576;
+    this.artworkImage.onload = () => {
+      if (this.disposed) return;
+      this.artworkReady = true;
+      this.paintPlaceholder(performance.now());
+    };
     this.placeholderTexture = new THREE.CanvasTexture(this.placeholderCanvas);
     this.placeholderTexture.colorSpace = THREE.SRGBColorSpace;
     this.placeholderTexture.minFilter = THREE.LinearFilter;
@@ -100,6 +108,7 @@ export class CinemaRenderer {
     this.screenMesh.position.set(0, SCREEN_Y, SCREEN_Z + 0.12);
     this.screenMesh.scale.set(SCREEN_WIDTH, SCREEN_HEIGHT, 1);
     this.scene.add(this.screenMesh);
+    this.artworkImage.src = cinemaScreenArtwork;
     this.buildCinema();
 
     this.resizeObserver = new ResizeObserver(() => this.resize());
@@ -281,6 +290,16 @@ export class CinemaRenderer {
     if (!ctx) return;
     const w = this.placeholderCanvas.width;
     const h = this.placeholderCanvas.height;
+    if (this.artworkReady) {
+      ctx.drawImage(this.artworkImage, 0, 0, w, h);
+      const glow = ctx.createRadialGradient(w * 0.34, h * 0.38, 0, w * 0.34, h * 0.38, w * 0.48);
+      glow.addColorStop(0, `rgba(255, 197, 112, ${0.035 + 0.018 * Math.sin(time * 0.00065)})`);
+      glow.addColorStop(1, "rgba(255, 197, 112, 0)");
+      ctx.fillStyle = glow;
+      ctx.fillRect(0, 0, w, h);
+      this.placeholderTexture.needsUpdate = true;
+      return;
+    }
     const sweep = (time * 0.000035) % 1;
     const background = ctx.createLinearGradient(0, 0, w, h);
     background.addColorStop(0, "#06090c");
@@ -424,7 +443,7 @@ export class CinemaRenderer {
     } else {
       this.camera.quaternion.setFromEuler(new THREE.Euler(this.manualPitch, this.manualYaw, 0, "YXZ"));
     }
-    const placeholderInterval = this.quality === "low" ? 83 : this.quality === "medium" ? 50 : 33;
+    const placeholderInterval = this.quality === "low" ? 150 : this.quality === "medium" ? 100 : 66;
     if (!this.videoTexture && time - this.lastPlaceholderDraw > placeholderInterval) {
       this.paintPlaceholder(time);
       this.lastPlaceholderDraw = time;
@@ -477,6 +496,7 @@ export class CinemaRenderer {
 
   dispose() {
     this.disposed = true;
+    this.artworkImage.onload = null;
     this.stop();
     document.removeEventListener("visibilitychange", this.onVisibility);
     this.canvas.removeEventListener("webglcontextlost", this.onContextLost);
