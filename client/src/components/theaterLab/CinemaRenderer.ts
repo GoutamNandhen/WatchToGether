@@ -1,19 +1,20 @@
 import * as THREE from "three";
+import { RoundedBoxGeometry } from "three/addons/geometries/RoundedBoxGeometry.js";
 
 export type TheaterQuality = "low" | "medium" | "high";
 export type TheaterSeat = "gallery" | "center" | "front";
 
 type RendererReport = { fps: number | null; error: string | null };
 
-const SCREEN_WIDTH = 12.8;
-const SCREEN_HEIGHT = 7.2;
-const SCREEN_Y = 4.35;
-const SCREEN_Z = -15.3;
+const SCREEN_WIDTH = 14.4;
+const SCREEN_HEIGHT = 8.1;
+const SCREEN_Y = 5.05;
+const SCREEN_Z = -12;
 
 const SEATS: Record<TheaterSeat, THREE.Vector3> = {
-  gallery: new THREE.Vector3(0, 2.1, 13.4),
-  center: new THREE.Vector3(0, 1.95, 8.4),
-  front: new THREE.Vector3(0, 1.8, 3.1),
+  gallery: new THREE.Vector3(2, 1.8, 11),
+  center: new THREE.Vector3(2, 1.55, 4.4),
+  front: new THREE.Vector3(2, 1.45, -0.6),
 };
 
 /** Owns only the experimental scene. It never reads or writes room state. */
@@ -21,17 +22,17 @@ export class CinemaRenderer {
   private readonly canvas: HTMLCanvasElement;
   private readonly mobile: boolean;
   private readonly scene = new THREE.Scene();
-  private readonly camera = new THREE.PerspectiveCamera(63, 1, 0.05, 90);
+  private readonly camera = new THREE.PerspectiveCamera(47, 1, 0.05, 90);
   private readonly stereoCamera = new THREE.StereoCamera();
   private readonly renderer: THREE.WebGLRenderer;
   private readonly unitBox = new THREE.BoxGeometry(1, 1, 1);
+  private readonly roundedBox = new RoundedBoxGeometry(1, 1, 1, 2, 0.09);
   private readonly placeholderCanvas = document.createElement("canvas");
   private readonly placeholderTexture: THREE.CanvasTexture;
   private readonly screenMaterial: THREE.MeshBasicMaterial;
   private readonly screenMesh: THREE.Mesh;
   private readonly materials: THREE.Material[] = [];
   private readonly geometries: THREE.BufferGeometry[] = [];
-  private readonly targetSeat = SEATS.gallery.clone();
   private readonly resizeObserver: ResizeObserver;
   private readonly onReport: (report: RendererReport) => void;
   private readonly onVisibility = () => {
@@ -46,7 +47,6 @@ export class CinemaRenderer {
   private animationFrame = 0;
   private running = false;
   private disposed = false;
-  private lastFrame = 0;
   private frames = 0;
   private fpsWindow = 0;
   private lastPlaceholderDraw = 0;
@@ -57,7 +57,7 @@ export class CinemaRenderer {
   private stereo = false;
   private videoTexture: THREE.VideoTexture | null = null;
   private manualYaw = 0;
-  private manualPitch = 0.095;
+  private manualPitch = 0;
   private sensorQuaternion: THREE.Quaternion | null = null;
   private sensorRecenter: THREE.Quaternion | null = null;
   private lastError: string | null = null;
@@ -79,10 +79,11 @@ export class CinemaRenderer {
     });
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.05;
-    this.scene.background = new THREE.Color("#08090b");
-    this.scene.fog = new THREE.FogExp2("#08090b", 0.018);
-    this.camera.position.copy(SEATS.gallery);
+    this.renderer.toneMappingExposure = 1.38;
+    this.scene.background = new THREE.Color("#110f12");
+    this.scene.fog = new THREE.FogExp2("#110f12", 0.006);
+    this.camera.position.copy(SEATS.center);
+    this.faceScreen();
     this.stereoCamera.aspect = 0.5;
     this.stereoCamera.eyeSep = 0.065;
 
@@ -91,12 +92,12 @@ export class CinemaRenderer {
     this.placeholderTexture = new THREE.CanvasTexture(this.placeholderCanvas);
     this.placeholderTexture.colorSpace = THREE.SRGBColorSpace;
     this.placeholderTexture.minFilter = THREE.LinearFilter;
-    this.screenMaterial = new THREE.MeshBasicMaterial({ map: this.placeholderTexture, toneMapped: false, fog: false });
+    this.screenMaterial = new THREE.MeshBasicMaterial({ map: this.placeholderTexture, color: "#ffffff", toneMapped: false, fog: false });
     this.materials.push(this.screenMaterial);
     const screenGeometry = new THREE.PlaneGeometry(1, 1);
     this.geometries.push(screenGeometry);
     this.screenMesh = new THREE.Mesh(screenGeometry, this.screenMaterial);
-    this.screenMesh.position.set(0, SCREEN_Y, SCREEN_Z + 0.03);
+    this.screenMesh.position.set(0, SCREEN_Y, SCREEN_Z + 0.12);
     this.screenMesh.scale.set(SCREEN_WIDTH, SCREEN_HEIGHT, 1);
     this.scene.add(this.screenMesh);
     this.buildCinema();
@@ -129,81 +130,150 @@ export class CinemaRenderer {
     return mesh;
   }
 
+  private addInstances(material: THREE.Material, boxes: Array<[number, number, number, number, number, number]>, geometry: THREE.BufferGeometry = this.unitBox) {
+    const mesh = new THREE.InstancedMesh(geometry, material, boxes.length);
+    const instance = new THREE.Object3D();
+    boxes.forEach(([x, y, z, w, h, d], index) => {
+      instance.position.set(x, y, z);
+      instance.scale.set(w, h, d);
+      instance.updateMatrix();
+      mesh.setMatrixAt(index, instance.matrix);
+    });
+    mesh.instanceMatrix.needsUpdate = true;
+    this.scene.add(mesh);
+  }
+
   private buildCinema() {
-    const charcoal = this.material("#141518");
-    const wall = this.material("#1c1a19");
-    const panel = this.material("#24211e");
-    const carpet = this.material("#171216", 0, 1);
-    const velvet = this.material("#362329", 0, 0.95);
-    const seatFrame = this.material("#171418", 0.15, 0.75);
-    const bronze = this.material("#625039", 0.62, 0.38);
-    const gold = this.glow("#9b7040");
-    const softGold = this.glow("#4d3722");
-    const screenBack = this.glow("#020304");
+    const floor = this.material("#292226", 0.05, 0.94);
+    const riser = this.material("#211a1e", 0.05, 0.92);
+    const wall = this.material("#292428", 0.04, 0.93);
+    const acoustic = this.material("#3a3034", 0.02, 1);
+    const acousticInset = this.material("#211c22", 0.02, 1);
+    const fabricSlat = this.material("#514148", 0.02, 1);
+    const ceiling = this.material("#201d21", 0.05, 0.88);
+    const velvet = this.material("#713d48", 0.02, 0.96);
+    const seatCushion = this.material("#844b55", 0.02, 0.96);
+    const seatFrame = this.material("#242026", 0.18, 0.72);
+    const bronze = this.material("#92734e", 0.58, 0.4);
+    const darkBronze = this.material("#604b38", 0.45, 0.5);
+    const goldLight = this.glow("#d7aa6d");
+    const lowLight = this.glow("#8e633d");
+    const sconceHalo = this.glow("#61402e");
+    const screenBack = this.glow("#030405");
 
-    this.addBox(0, -0.12, 0, 25, 0.25, 37, carpet);
-    this.addBox(0, 8.8, 0, 25, 0.25, 37, charcoal);
-    this.addBox(-12.25, 4.3, 0, 0.3, 9, 37, wall);
-    this.addBox(12.25, 4.3, 0, 0.3, 9, 37, wall);
-    this.addBox(0, 4.3, -17, 25, 9, 0.35, wall);
-    this.addBox(0, 4.3, 18, 25, 9, 0.35, wall);
+    // A compact 30 m auditorium with gentle seating tiers and a screen above a low stage.
+    this.addBox(0, -0.19, 1.4, 22, 0.38, 30, floor);
+    this.addBox(0, 9.64, 1.4, 22, 0.28, 30, ceiling);
+    this.addBox(-10.95, 4.7, 1.4, 0.28, 9.6, 30, wall);
+    this.addBox(10.95, 4.7, 1.4, 0.28, 9.6, 30, wall);
+    this.addBox(0, 4.7, -13.45, 22, 9.6, 0.25, wall);
+    this.addBox(0, 4.7, 16.25, 22, 9.6, 0.25, wall);
 
-    // Proscenium and screen; bright details use unlit strips rather than costly bloom.
-    this.addBox(0, SCREEN_Y, SCREEN_Z - 0.08, 13.5, 7.85, 0.22, bronze);
-    this.addBox(0, SCREEN_Y, SCREEN_Z - 0.025, SCREEN_WIDTH, SCREEN_HEIGHT, 0.08, screenBack);
-    this.addBox(0, 8.35, SCREEN_Z + 0.04, 14.8, 0.045, 0.09, gold);
-    this.addBox(0, 0.38, SCREEN_Z + 0.04, 14.8, 0.035, 0.09, softGold);
-    this.addBox(-7.36, SCREEN_Y, SCREEN_Z + 0.04, 0.05, 8, 0.09, softGold);
-    this.addBox(7.36, SCREEN_Y, SCREEN_Z + 0.04, 0.05, 8, 0.09, softGold);
-    this.addBox(0, 0.12, -14.9, 16.8, 0.24, 3.3, charcoal);
+    // The video plane is the frontmost surface. All luminous trim sits outside its bounds.
+    this.addBox(0, SCREEN_Y, SCREEN_Z - 0.08, 15.2, 8.72, 0.2, darkBronze);
+    this.addBox(0, SCREEN_Y, SCREEN_Z + 0.005, SCREEN_WIDTH, SCREEN_HEIGHT, 0.08, screenBack);
+    this.addBox(0, 9.27, SCREEN_Z + 0.16, 15.15, 0.08, 0.1, bronze);
+    this.addBox(0, 0.83, SCREEN_Z + 0.16, 15.15, 0.08, 0.1, bronze);
+    this.addBox(-7.56, SCREEN_Y, SCREEN_Z + 0.16, 0.08, 8.8, 0.1, bronze);
+    this.addBox(7.56, SCREEN_Y, SCREEN_Z + 0.16, 0.08, 8.8, 0.1, bronze);
+    this.addBox(0, 9.32, SCREEN_Z + 0.22, 14.9, 0.025, 0.025, lowLight);
+    this.addBox(0, 0.22, -11.48, 17.5, 0.42, 3.5, riser);
+    this.addBox(0, 0.46, -9.8, 18, 0.05, 0.06, bronze);
+    this.addBox(-8.7, 4.75, -12.82, 1.2, 8.7, 0.16, acousticInset);
+    this.addBox(8.7, 4.75, -12.82, 1.2, 8.7, 0.16, acousticInset);
 
-    // Art-deco wall bays, aisle lights and restrained ceiling ribs.
-    for (let i = 0; i < 8; i++) {
-      const z = -12.8 + i * 4.1;
+    const panels: Array<[number, number, number, number, number, number]> = [];
+    const insetPanels: typeof panels = [];
+    const slats: typeof panels = [];
+    const verticalTrim: typeof panels = [];
+    const sconces: typeof panels = [];
+    const halos: typeof panels = [];
+    const ceilingRibs: typeof panels = [];
+    const ceilingGlow: typeof panels = [];
+    const aisleLamps: typeof panels = [];
+    const stepEdges: typeof panels = [];
+
+    for (let bay = 0; bay < 6; bay++) {
+      const z = -9.5 + bay * 4.45;
       for (const side of [-1, 1]) {
-        this.addBox(side * 12.01, 4.35, z, 0.11, 6.9, 3.45, panel);
-        this.addBox(side * 11.9, 4.35, z - 1.72, 0.12, 7.1, 0.07, bronze);
-        this.addBox(side * 11.88, 5.55, z, 0.14, 1.75, 0.045, softGold);
-        this.addBox(side * 10.8, 0.13, z, 0.035, 0.02, 1.2, gold);
+        panels.push([side * 10.77, 4.7, z, 0.14, 7.75, 3.7]);
+        insetPanels.push([side * 10.67, 4.76, z, 0.08, 6.9, 3.22]);
+        for (let slat = 0; slat < 5; slat++) {
+          slats.push([side * 10.59, 4.75, z - 1.25 + slat * 0.62, 0.045, 5.7, 0.065]);
+        }
+        verticalTrim.push([side * 10.59, 4.7, z - 1.77, 0.12, 8.1, 0.075]);
+        verticalTrim.push([side * 10.58, 1.18, z, 0.1, 0.055, 3.34]);
+        halos.push([side * 10.5, 4.65, z + 0.4, 0.025, 1.66, 0.92]);
+        sconces.push([side * 10.45, 4.65, z + 0.4, 0.06, 0.65, 0.16]);
       }
-      this.addBox(0, 8.58, z, 23.6, 0.07, 0.08, bronze);
-      this.addBox(0, 8.5, z + 0.09, 11.2, 0.025, 0.025, softGold);
+      ceilingRibs.push([0, 9.43, z - 1.98, 21, 0.18, 0.18]);
+      ceilingGlow.push([0, 9.33, z - 1.98, 13.6, 0.025, 0.03]);
     }
-    this.addBox(-1.27, 0.015, 1.5, 0.025, 0.02, 29, softGold);
-    this.addBox(1.27, 0.015, 1.5, 0.025, 0.02, 29, softGold);
+    this.addInstances(acoustic, panels);
+    this.addInstances(acousticInset, insetPanels);
+    this.addInstances(fabricSlat, slats);
+    this.addInstances(bronze, verticalTrim);
+    this.addInstances(sconceHalo, halos);
+    this.addInstances(goldLight, sconces);
+    this.addInstances(darkBronze, ceilingRibs);
+    this.addInstances(lowLight, ceilingGlow);
+    this.addBox(-9.3, 9.3, 1.4, 0.08, 0.08, 29, darkBronze);
+    this.addBox(9.3, 9.3, 1.4, 0.08, 0.08, 29, darkBronze);
+    this.addBox(0, 9.28, 1.4, 7.9, 0.06, 28.4, acousticInset);
 
-    // Four instanced batches draw all seats, preserving detail on slower phones.
-    const positions: Array<[number, number]> = [];
-    const seatXs = [-9.1, -7.25, -5.4, -3.55, 3.55, 5.4, 7.25, 9.1];
-    for (const z of [-0.7, 2.4, 5.5, 8.6, 11.7, 14.8]) {
-      for (const x of seatXs) positions.push([x, z]);
-    }
-    const dummy = new THREE.Object3D();
-    const addSeatPart = (material: THREE.Material, part: (x: number, z: number) => [number, number, number, number, number, number]) => {
-      const mesh = new THREE.InstancedMesh(this.unitBox, material, positions.length);
-      positions.forEach(([x, z], index) => {
-        const [px, py, pz, sx, sy, sz] = part(x, z);
-        dummy.position.set(px, py, pz);
-        dummy.scale.set(sx, sy, sz);
-        dummy.updateMatrix();
-        mesh.setMatrixAt(index, dummy.matrix);
-      });
-      mesh.instanceMatrix.needsUpdate = true;
-      this.scene.add(mesh);
-    };
-    addSeatPart(seatFrame, (x, z) => [x, 0.43, z, 1.48, 0.72, 1.12]);
-    addSeatPart(velvet, (x, z) => [x, 1.06, z + 0.36, 1.35, 1.38, 0.29]);
-    addSeatPart(velvet, (x, z) => [x, 0.77, z - 0.22, 1.35, 0.22, 0.92]);
-    addSeatPart(bronze, (x, z) => [x - 0.79, 0.79, z - 0.06, 0.12, 0.16, 1.13]);
-    addSeatPart(bronze, (x, z) => [x + 0.79, 0.79, z - 0.06, 0.12, 0.16, 1.13]);
+    const rowZ = [-1, 1.9, 4.8, 7.7, 10.6, 13.5];
+    const seatX = [-8.6, -7, -5.4, -3.8, -2.2, 2.2, 3.8, 5.4, 7, 8.6];
+    const seats: Array<[number, number, number]> = [];
+    rowZ.forEach((z, row) => {
+      const rise = row * 0.115;
+      this.addBox(0, rise / 2 - 0.015, z, 21.3, rise + 0.07, 2.82, riser);
+      stepEdges.push([0, rise + 0.03, z - 1.39, 21.2, 0.035, 0.045]);
+      for (const x of seatX) seats.push([x, z, rise]);
+      for (const side of [-1, 1]) {
+        aisleLamps.push([side * 1.13, rise + 0.045, z - 1.17, 0.18, 0.04, 0.55]);
+        aisleLamps.push([side * 9.97, rise + 0.045, z - 1.17, 0.18, 0.04, 0.55]);
+      }
+    });
+    this.addInstances(darkBronze, stepEdges);
+    this.addInstances(goldLight, aisleLamps);
+    this.addBox(0, 0.015, 1.4, 2.14, 0.03, 28.5, floor);
 
-    this.scene.add(new THREE.AmbientLight("#c7b8a4", 1.45));
-    const screenLight = new THREE.PointLight("#af8555", 18, 32, 2);
-    screenLight.position.set(0, 6.8, -12.5);
-    this.scene.add(screenLight);
-    const rearLight = new THREE.PointLight("#9c6839", 8, 18, 2);
-    rearLight.position.set(0, 7.8, 12);
-    this.scene.add(rearLight);
+    // Each upholstered chair uses shared low-poly rounded geometry and seven instanced parts.
+    const frameParts: Array<[number, number, number, number, number, number]> = [];
+    const backs: typeof frameParts = [];
+    const headrests: typeof frameParts = [];
+    const cushions: typeof frameParts = [];
+    const sideBolsters: typeof frameParts = [];
+    const armrests: typeof frameParts = [];
+    const piping: typeof frameParts = [];
+    seats.forEach(([x, z, rise]) => {
+      frameParts.push([x, rise + 0.42, z, 1.46, 0.74, 1.24]);
+      backs.push([x, rise + 1.21, z + 0.42, 1.35, 1.46, 0.38]);
+      headrests.push([x, rise + 1.78, z + 0.43, 1.15, 0.32, 0.42]);
+      cushions.push([x, rise + 0.85, z - 0.18, 1.26, 0.25, 0.94]);
+      for (const side of [-1, 1]) {
+        sideBolsters.push([x + side * 0.61, rise + 1.21, z + 0.38, 0.15, 1.3, 0.42]);
+        armrests.push([x + side * 0.77, rise + 0.92, z - 0.06, 0.17, 0.3, 1.22]);
+        piping.push([x + side * 0.75, rise + 1.08, z - 0.05, 0.035, 0.035, 1.13]);
+      }
+    });
+    this.addInstances(seatFrame, frameParts, this.roundedBox);
+    this.addInstances(velvet, backs, this.roundedBox);
+    this.addInstances(seatCushion, headrests, this.roundedBox);
+    this.addInstances(seatCushion, cushions, this.roundedBox);
+    this.addInstances(velvet, sideBolsters, this.roundedBox);
+    this.addInstances(seatFrame, armrests, this.roundedBox);
+    this.addInstances(bronze, piping);
+
+    // Static fills reveal upholstery and architecture; no shadow maps or post-processing.
+    this.scene.add(new THREE.AmbientLight("#cbb8b2", 1.1));
+    this.scene.add(new THREE.HemisphereLight("#f4dcc0", "#4c303a", 2.2));
+    const frontFill = new THREE.DirectionalLight("#d6dee9", 1.25);
+    frontFill.position.set(0, 8, -8);
+    this.scene.add(frontFill);
+    const aisleFill = new THREE.PointLight("#e2ae79", 55, 19, 2);
+    aisleFill.position.set(0, 4.6, 5.5);
+    this.scene.add(aisleFill);
   }
 
   private paintPlaceholder(time: number) {
@@ -269,7 +339,15 @@ export class CinemaRenderer {
   }
 
   setSeat(seat: TheaterSeat) {
-    this.targetSeat.copy(SEATS[seat]);
+    this.camera.position.copy(SEATS[seat]);
+    this.recenter();
+  }
+
+  private faceScreen() {
+    const position = this.camera.position;
+    const depth = position.z - SCREEN_Z;
+    this.manualYaw = Math.atan2(position.x, depth);
+    this.manualPitch = Math.atan2(SCREEN_Y - position.y, Math.hypot(position.x, depth));
   }
 
   look(dx: number, dy: number) {
@@ -293,10 +371,10 @@ export class CinemaRenderer {
   }
 
   recenter() {
-    if (this.sensorQuaternion) this.sensorRecenter = this.sensorQuaternion.clone().invert();
-    else {
-      this.manualYaw = 0;
-      this.manualPitch = 0.095;
+    this.faceScreen();
+    if (this.sensorQuaternion) {
+      const centeredView = new THREE.Quaternion().setFromEuler(new THREE.Euler(this.manualPitch, this.manualYaw, 0, "YXZ"));
+      this.sensorRecenter = centeredView.multiply(this.sensorQuaternion.clone().invert());
     }
   }
 
@@ -328,6 +406,10 @@ export class CinemaRenderer {
     this.screenMaterial.needsUpdate = true;
   }
 
+  isVideoTextureUpdating() {
+    return Boolean(this.videoTexture && this.videoTexture.version > 0 && !this.lastError);
+  }
+
   private fail(message: string) {
     if (this.lastError === message) return;
     this.lastError = message;
@@ -337,9 +419,6 @@ export class CinemaRenderer {
   private frame = (time: number) => {
     if (!this.running || this.disposed) return;
     this.animationFrame = requestAnimationFrame(this.frame);
-    const delta = this.lastFrame ? Math.min((time - this.lastFrame) / 1000, 0.1) : 0;
-    this.lastFrame = time;
-    this.camera.position.lerp(this.targetSeat, Math.min(1, delta * 3.5));
     if (this.sensorQuaternion && this.sensorRecenter) {
       this.camera.quaternion.copy(this.sensorQuaternion).premultiply(this.sensorRecenter);
     } else {
@@ -385,7 +464,6 @@ export class CinemaRenderer {
   private start() {
     if (this.running || this.disposed || document.hidden) return;
     this.running = true;
-    this.lastFrame = 0;
     this.frames = 0;
     this.fpsWindow = performance.now();
     this.animationFrame = requestAnimationFrame(this.frame);
@@ -406,6 +484,7 @@ export class CinemaRenderer {
     this.videoTexture?.dispose();
     this.placeholderTexture.dispose();
     this.unitBox.dispose();
+    this.roundedBox.dispose();
     this.geometries.forEach((geometry) => geometry.dispose());
     this.materials.forEach((material) => material.dispose());
     this.renderer.dispose();

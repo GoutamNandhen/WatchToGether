@@ -24,7 +24,7 @@ export default function TheaterLab() {
   const [device] = useState(detectDevice);
   const [webgl, setWebgl] = useState<"checking" | "available" | "unavailable">("checking");
   const [quality, setQuality] = useState<TheaterQuality>("medium");
-  const [seat, setSeat] = useState<TheaterSeat>("gallery");
+  const [seat, setSeat] = useState<TheaterSeat>("center");
   const [stereo, setStereo] = useState(false);
   const [eyeSep, setEyeSep] = useState(0.065);
   const [fullscreen, setFullscreen] = useState(false);
@@ -35,10 +35,11 @@ export default function TheaterLab() {
   const [textureState, setTextureState] = useState<TextureState>("placeholder");
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
   const [videoName, setVideoName] = useState<string | null>(null);
+  const [videoDimensions, setVideoDimensions] = useState<string | null>(null);
   const [playing, setPlaying] = useState(false);
   const [volume, setVolume] = useState(0.7);
   const [notice, setNotice] = useState<string | null>(null);
-  const [showDiagnostics, setShowDiagnostics] = useState(true);
+  const [showDiagnostics, setShowDiagnostics] = useState(false);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -145,6 +146,7 @@ export default function TheaterLab() {
     setTextureState("waiting");
     setNotice(null);
     setVideoName(file.name);
+    setVideoDimensions(null);
     setVideoUrl(URL.createObjectURL(file));
     event.target.value = "";
   };
@@ -263,6 +265,7 @@ export default function TheaterLab() {
             </div>}
             <video ref={videoRef} className={webgl === "unavailable" && videoUrl ? "t3-video-fallback" : "t3-video-hidden"}
               src={videoUrl || undefined} playsInline preload="metadata" onPause={() => setPlaying(false)}
+              onLoadedMetadata={(event) => { const video = event.currentTarget; setVideoDimensions(`${video.videoWidth} × ${video.videoHeight}`); }}
               onPlaying={() => setPlaying(true)} onLoadedData={(event) => {
                 const video = event.currentTarget;
                 if (!video.paused && webgl === "available") {
@@ -270,7 +273,7 @@ export default function TheaterLab() {
                   setTextureState("ready");
                 }
               }}
-              onTimeUpdate={(event) => { if (event.currentTarget.currentTime > 0 && webgl === "available" && !renderError) setTextureState("working"); }}
+              onTimeUpdate={() => { if (sceneRef.current?.isVideoTextureUpdating()) setTextureState("working"); }}
               onError={() => { setTextureState("failed"); setNotice("This MP4 or codec is not supported by the browser."); sceneRef.current?.setVideo(null); }}
               onEnded={() => setPlaying(false)} />
           </div>
@@ -289,6 +292,7 @@ export default function TheaterLab() {
                 <div><dt>Approx. FPS</dt><dd>{fps === null ? document.hidden ? "paused" : "—" : fps}</dd></div>
                 <div><dt>Quality</dt><dd>{quality}</dd></div>
                 <div><dt>Video texture</dt><dd>{textureState}</dd></div>
+                {videoDimensions && <div><dt>Source</dt><dd>{videoDimensions}</dd></div>}
                 <div className="t3-error-row"><dt>Last error</dt><dd>{renderError || "none"}</dd></div>
               </dl>
             </aside>}
@@ -296,12 +300,13 @@ export default function TheaterLab() {
           </>}
 
           {stereo && <div className="t3-vr-actions">
-            <button type="button" onClick={() => sceneRef.current?.recenter()}><RotateCcw size={16} /> Recenter</button>
-            <button type="button" onClick={exitStereo}><X size={17} /> Exit VR</button>
+            {[0, 1].map((eye) => <div className="t3-vr-eye" key={eye}>
+              <button type="button" onClick={() => sceneRef.current?.recenter()} aria-label="Recenter view"><RotateCcw size={16} /></button>
+              <button type="button" onClick={exitStereo} aria-label="Exit VR"><X size={17} /></button>
+            </div>)}
           </div>}
 
           {!stereo && <div className="t3-bottom">
-            <div className="t3-status"><span className="t3-status-kicker">YOUR PRIVATE SCREENING</span><strong>{videoName || "A new perspective on movie night"}</strong><small>{videoName ? "Local file · never uploaded" : "A room-independent 3D feasibility study"}</small></div>
             <div className="t3-controls">
               <input ref={fileInputRef} type="file" accept="video/mp4,.mp4" onChange={chooseFile} className="sr-only" aria-label="Choose local MP4" />
               <button type="button" className="t3-primary" onClick={() => fileInputRef.current?.click()}><Upload size={15} /> <span>Local MP4</span></button>
@@ -314,6 +319,8 @@ export default function TheaterLab() {
             </div>
           </div>}
         </div>
+
+        {!stereo && <div className="t3-status"><span className="t3-status-kicker">YOUR PRIVATE SCREENING</span><strong>{videoName || "A new perspective on movie night"}</strong><small>{videoName ? "Local file · never uploaded" : "A room-independent 3D feasibility study"}</small></div>}
 
         {!stereo && <div className="t3-options">
           <div className="t3-options-group"><span>RENDER QUALITY</span><div className="t3-segment">{(["low", "medium", "high"] as const).map((value) => <button type="button" key={value} className={quality === value ? "selected" : ""} onClick={() => { setQuality(value); sceneRef.current?.setQuality(value); }}>{value}</button>)}</div></div>
