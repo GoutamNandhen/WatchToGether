@@ -1,0 +1,448 @@
+import { useCallback, useEffect, useRef, useState, type ChangeEvent, type PointerEvent } from "react";
+import { ArrowLeft, Armchair, Bookmark, Compass, Expand, Glasses, Gauge, Headset, Info, Maximize2, MessageSquare, MonitorUp, Pause, Play, RotateCcw, Settings2, Upload, Volume2, VolumeX, X } from "lucide-react";
+import { Link } from "react-router-dom";
+import { CinemaRenderer, type TheaterQuality, type TheaterSeat } from "./CinemaRenderer";
+import "./theaterLab.css";
+
+type MotionState = "unavailable" | "available" | "requesting" | "waiting" | "active" | "denied" | "needs-https";
+type TextureState = "placeholder" | "waiting" | "ready" | "working" | "failed";
+type TheaterPanel = "chat" | "seats" | "moments" | "settings";
+
+const detectDevice = () => {
+  if (typeof window === "undefined") return "Unknown";
+  const touch = navigator.maxTouchPoints > 0 || "ontouchstart" in window;
+  return touch && Math.min(window.innerWidth, window.innerHeight) < 760 ? "Phone / touch" : touch ? "Touch computer / tablet" : "Desktop";
+};
+
+export default function TheaterLab() {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const stageRef = useRef<HTMLDivElement>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const sceneRef = useRef<CinemaRenderer | null>(null);
+  const dragRef = useRef<{ x: number; y: number } | null>(null);
+  const motionSeenRef = useRef(false);
+  const hideTimerRef = useRef<number | null>(null);
+  const [device] = useState(detectDevice);
+  const [webgl, setWebgl] = useState<"checking" | "available" | "unavailable">("checking");
+  const [quality, setQuality] = useState<TheaterQuality>("medium");
+  const [seat, setSeat] = useState<TheaterSeat>("center");
+  const [stereo, setStereo] = useState(false);
+  const [eyeSep, setEyeSep] = useState(0.065);
+  const [fullscreen, setFullscreen] = useState(false);
+  const [motionState, setMotionState] = useState<MotionState>(() => typeof window !== "undefined" && "DeviceOrientationEvent" in window ? "available" : "unavailable");
+  const [motionEnabled, setMotionEnabled] = useState(false);
+  const [fps, setFps] = useState<number | null>(null);
+  const [renderError, setRenderError] = useState<string | null>(null);
+  const [textureState, setTextureState] = useState<TextureState>("placeholder");
+  const [videoUrl, setVideoUrl] = useState<string | null>(null);
+  const [videoName, setVideoName] = useState<string | null>(null);
+  const [videoDimensions, setVideoDimensions] = useState<string | null>(null);
+  const [playing, setPlaying] = useState(false);
+  const [volume, setVolume] = useState(0.7);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [showDiagnostics, setShowDiagnostics] = useState(false);
+  const [activePanel, setActivePanel] = useState<TheaterPanel | null>(() => typeof window !== "undefined" && window.innerWidth > 900 ? "chat" : null);
+  const [controlsVisible, setControlsVisible] = useState(true);
+  const [xrSupported, setXrSupported] = useState(false);
+  const [inXR, setInXR] = useState(false);
+  const [sharing, setSharing] = useState(false);
+  const [dragOver, setDragOver] = useState(false);
+  const streamRef = useRef<MediaStream | null>(null);
+  const hasSource = Boolean(videoUrl) || sharing;
+
+  useEffect(() => {
+    let alive = true;
+    CinemaRenderer.isXRSupported().then((ok) => { if (alive) setXrSupported(ok); });
+    return () => { alive = false; };
+  }, []);
+
+  // House lights dim while the film plays.
+  useEffect(() => { sceneRef.current?.setPlaying(playing); }, [playing]);
+
+  // Stop any screen share when leaving the lab.
+  useEffect(() => () => { streamRef.current?.getTracks().forEach((t) => t.stop()); }, []);
+
+  const revealControls = useCallback(() => {
+    setControlsVisible(true);
+    if (hideTimerRef.current !== null) window.clearTimeout(hideTimerRef.current);
+    if (playing) hideTimerRef.current = window.setTimeout(() => {
+      if (!stageRef.current?.querySelector(".t3-glass-menu:is(:hover, :focus-within), .t3-floating-panel:is(:hover, :focus-within), .t3-bottom:is(:hover, :focus-within)")) setControlsVisible(false);
+    }, 4500);
+  }, [playing]);
+
+  useEffect(() => {
+    revealControls();
+    return () => { if (hideTimerRef.current !== null) window.clearTimeout(hideTimerRef.current); };
+  }, [revealControls]);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    let cancelled = false;
+    try {
+      const scene = new CinemaRenderer(canvas, device.startsWith("Phone"), (report) => {
+        setFps(report.fps);
+        if (report.error) {
+          setRenderError(report.error);
+          setTextureState((current) => current === "working" ? "failed" : current);
+        }
+      });
+      scene.setQuality("medium");
+      sceneRef.current = scene;
+      queueMicrotask(() => { if (!cancelled) setWebgl("available"); });
+      return () => {
+        cancelled = true;
+        scene.dispose();
+        sceneRef.current = null;
+      };
+    } catch (error) {
+      queueMicrotask(() => {
+        if (!cancelled) {
+          setWebgl("unavailable");
+          setRenderError(error instanceof Error ? error.message : "WebGL is unavailable in this browser.");
+        }
+      });
+      return () => { cancelled = true; };
+    }
+  }, [device]);
+
+  useEffect(() => {
+    return () => { if (videoUrl) URL.revokeObjectURL(videoUrl); };
+  }, [videoUrl]);
+
+  useEffect(() => {
+    const onFullscreen = () => setFullscreen(document.fullscreenElement === stageRef.current);
+    document.addEventListener("fullscreenchange", onFullscreen);
+    return () => document.removeEventListener("fullscreenchange", onFullscreen);
+  }, []);
+
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.target instanceof HTMLElement && ["INPUT", "SELECT", "TEXTAREA", "BUTTON"].includes(event.target.tagName)) return;
+      const selected: TheaterSeat | undefined = event.key === "1" ? "gallery" : event.key === "2" ? "center" : event.key === "3" ? "front" : undefined;
+      if (selected) {
+        setSeat(selected);
+        sceneRef.current?.setSeat(selected);
+      } else if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+        sceneRef.current?.look(event.key === "ArrowLeft" ? 16 : -16, 0);
+        event.preventDefault();
+      } else if (event.key === "+" || event.key === "=") {
+        sceneRef.current?.zoom(-4);
+      } else if (event.key === "-" || event.key === "_") {
+        sceneRef.current?.zoom(4);
+      } else if (event.key === "r" || event.key === "R") {
+        sceneRef.current?.recenter();
+      } else if (event.key === "ArrowUp" || event.key === "ArrowDown") {
+        sceneRef.current?.look(0, event.key === "ArrowUp" ? 16 : -16);
+        event.preventDefault();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  useEffect(() => {
+    if (!motionEnabled) return;
+    motionSeenRef.current = false;
+    const onMotion = (event: DeviceOrientationEvent) => {
+      if (event.alpha === null || event.beta === null || event.gamma === null) return;
+      const angle = screen.orientation?.angle ?? 0;
+      sceneRef.current?.useMotion(event.alpha, event.beta, event.gamma, angle);
+      if (!motionSeenRef.current) {
+        motionSeenRef.current = true;
+        setMotionState("active");
+      }
+    };
+    window.addEventListener("deviceorientation", onMotion);
+    const timeout = window.setTimeout(() => {
+      if (!motionSeenRef.current) {
+        setMotionState("unavailable");
+        setMotionEnabled(false);
+      }
+    }, 3500);
+    return () => {
+      window.clearTimeout(timeout);
+      window.removeEventListener("deviceorientation", onMotion);
+      sceneRef.current?.disableMotion();
+    };
+  }, [motionEnabled]);
+
+  const pickSeat = (value: TheaterSeat) => {
+    setSeat(value);
+    sceneRef.current?.setSeat(value);
+  };
+
+  const stopShare = () => {
+    streamRef.current?.getTracks().forEach((t) => t.stop());
+    streamRef.current = null;
+    if (videoRef.current) videoRef.current.srcObject = null;
+    setSharing(false);
+  };
+
+  const loadFile = (file: File | undefined) => {
+    if (!file) return;
+    if (!file.type.startsWith("video/") && !/\.(mp4|webm|mov|m4v|mkv)$/i.test(file.name)) {
+      setNotice("That isn't a video file. Try an MP4, WebM or MOV.");
+      return;
+    }
+    stopShare();
+    videoRef.current?.pause();
+    sceneRef.current?.setVideo(null);
+    setPlaying(false);
+    setTextureState("waiting");
+    setNotice(null);
+    setVideoName(file.name);
+    setVideoDimensions(null);
+    setVideoUrl(URL.createObjectURL(file));
+  };
+
+  const chooseFile = (event: ChangeEvent<HTMLInputElement>) => {
+    loadFile(event.target.files?.[0]);
+    event.target.value = "";
+  };
+
+  /** Put any tab or window on the big screen (e.g. a YouTube tab), with its audio when the browser allows. */
+  const shareScreen = async () => {
+    if (sharing) { stopShare(); sceneRef.current?.setVideo(null); setPlaying(false); setTextureState("placeholder"); return; }
+    if (!navigator.mediaDevices?.getDisplayMedia) { setNotice("Screen sharing isn't supported in this browser."); return; }
+    try {
+      const stream = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: 30 }, audio: true });
+      const video = videoRef.current;
+      if (!video) { stream.getTracks().forEach((t) => t.stop()); return; }
+      video.pause();
+      setVideoUrl(null);
+      setVideoName("Shared screen");
+      streamRef.current = stream;
+      video.srcObject = stream;
+      video.muted = false;
+      video.volume = volume;
+      stream.getVideoTracks()[0]?.addEventListener("ended", () => { stopShare(); sceneRef.current?.setVideo(null); setPlaying(false); setTextureState("placeholder"); setVideoName(null); });
+      setSharing(true);
+      await video.play();
+      setTextureState("waiting");
+      setNotice(null);
+    } catch {
+      setNotice("Screen share was cancelled.");
+    }
+  };
+
+  const enterHeadset = async () => {
+    try {
+      await sceneRef.current?.enterXR(() => setInXR(false));
+      setInXR(true);
+    } catch (error) {
+      setNotice(error instanceof Error ? `Couldn't start VR: ${error.message}` : "Couldn't start the VR session.");
+    }
+  };
+
+  const playVideo = async () => {
+    const video = videoRef.current;
+    if (!video || !hasSource) return;
+    if (playing) {
+      video.pause();
+      return;
+    }
+    try {
+      video.volume = volume;
+      await video.play();
+      if (video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA && video.videoWidth && video.videoHeight) {
+        sceneRef.current?.setVideo(video);
+        setTextureState("ready");
+      } else {
+        setTextureState("waiting");
+      }
+      setNotice(null);
+    } catch (error) {
+      video.pause();
+      sceneRef.current?.setVideo(null);
+      setTextureState("failed");
+      setNotice(error instanceof Error ? `Playback blocked or unsupported: ${error.message}` : "Playback was blocked by this browser.");
+    }
+  };
+
+  const toggleFullscreen = useCallback(async () => {
+    const target = stageRef.current;
+    if (!target) return;
+    try {
+      if (document.fullscreenElement === target) await document.exitFullscreen();
+      else if (target.requestFullscreen) await target.requestFullscreen();
+      else setNotice("This browser does not support page fullscreen. Stereo remains available in the page.");
+    } catch {
+      setNotice("Fullscreen was declined by this browser. You can keep watching in the page.");
+    }
+  }, []);
+
+  const enterStereo = async () => {
+    setStereo(true);
+    sceneRef.current?.setStereo(true, eyeSep);
+    if (stageRef.current?.requestFullscreen && document.fullscreenElement !== stageRef.current) {
+      try { await stageRef.current.requestFullscreen(); }
+      catch { setNotice("Stereo is active in the page; fullscreen was unavailable."); }
+    }
+  };
+
+  const exitStereo = async () => {
+    setStereo(false);
+    sceneRef.current?.setStereo(false);
+    if (document.fullscreenElement === stageRef.current) {
+      try { await document.exitFullscreen(); } catch { /* Browser may already have exited. */ }
+    }
+  };
+
+  const enableMotion = async () => {
+    if (motionEnabled) {
+      setMotionEnabled(false);
+      setMotionState("available");
+      return;
+    }
+    if (!window.isSecureContext) {
+      setMotionState("needs-https");
+      setNotice("Motion sensors need a secure HTTPS page on phones. See the local testing instructions.");
+      return;
+    }
+    if (!("DeviceOrientationEvent" in window)) {
+      setMotionState("unavailable");
+      return;
+    }
+    setMotionState("requesting");
+    try {
+      const sensor = DeviceOrientationEvent as typeof DeviceOrientationEvent & { requestPermission?: () => Promise<"granted" | "denied"> };
+      if (sensor.requestPermission && await sensor.requestPermission() !== "granted") {
+        setMotionState("denied");
+        return;
+      }
+      setMotionState("waiting");
+      setMotionEnabled(true);
+    } catch {
+      setMotionState("denied");
+      setNotice("Motion permission was not granted. Touch look is still available.");
+    }
+  };
+
+  const pointerDown = (event: PointerEvent<HTMLDivElement>) => {
+    if (webgl !== "available") return;
+    dragRef.current = { x: event.clientX, y: event.clientY };
+    event.currentTarget.setPointerCapture(event.pointerId);
+  };
+  const pointerMove = (event: PointerEvent<HTMLDivElement>) => {
+    if (!dragRef.current) return;
+    sceneRef.current?.look(event.clientX - dragRef.current.x, event.clientY - dragRef.current.y);
+    dragRef.current = { x: event.clientX, y: event.clientY };
+  };
+
+  return (
+    <div className="t3-root">
+      <header className="t3-header">
+        <div className="t3-brand"><span className="t3-brand-mark">W</span><span>WATCHTOGETHER <strong>THEATER LAB</strong></span></div>
+        <div className="t3-header-actions">
+          <span className="t3-dev-pill">DEVELOPMENT PROTOTYPE</span>
+          <Link to="/" className="t3-quiet-link"><ArrowLeft size={15} /> Classic Mode</Link>
+        </div>
+      </header>
+
+      <main className="t3-main">
+        <div className={`t3-stage${controlsVisible ? "" : " t3-idle"}`} ref={stageRef} onPointerMove={revealControls} onPointerDown={revealControls} onBlurCapture={revealControls}>
+          <div className={`t3-viewport${dragOver ? " t3-drop" : ""}`}
+            onWheel={(event) => sceneRef.current?.zoom(event.deltaY * 0.02)}
+            onDoubleClick={() => sceneRef.current?.recenter()}
+            onDragOver={(event) => { event.preventDefault(); setDragOver(true); }}
+            onDragLeave={() => setDragOver(false)}
+            onDrop={(event) => { event.preventDefault(); setDragOver(false); loadFile(event.dataTransfer.files?.[0]); }}
+            onPointerDown={pointerDown} onPointerMove={pointerMove} onPointerUp={() => { dragRef.current = null; }} onPointerCancel={() => { dragRef.current = null; }}>
+            <canvas ref={canvasRef} aria-label="Interactive 3D cinema" />
+            {dragOver && <div className="t3-drop-hint">Drop a video to screen it</div>}
+            {webgl === "unavailable" && <div className="t3-fallback">
+              <div className="t3-fallback-screen">{!hasSource && <><span>PRIVATE SCREENING</span><strong>THE CINEMA IS YOURS</strong><small>3D isn't available here, but video playback still works below.</small></>}</div>
+            </div>}
+            <video ref={videoRef} className={webgl === "unavailable" && hasSource ? "t3-video-fallback" : "t3-video-hidden"}
+              src={videoUrl || undefined} playsInline preload="metadata" onPause={() => setPlaying(false)}
+              onLoadedMetadata={(event) => { const video = event.currentTarget; setVideoDimensions(`${video.videoWidth} × ${video.videoHeight}`); }}
+              onPlaying={(event) => {
+                setPlaying(true);
+                const video = event.currentTarget;
+                if (webgl === "available" && video.videoWidth && !sceneRef.current?.isVideoTextureUpdating()) {
+                  sceneRef.current?.setVideo(video);
+                  setTextureState("ready");
+                }
+              }} onLoadedData={(event) => {
+                const video = event.currentTarget;
+                if (!video.paused && webgl === "available") {
+                  sceneRef.current?.setVideo(video);
+                  setTextureState("ready");
+                }
+              }}
+              onTimeUpdate={() => { if (sceneRef.current?.isVideoTextureUpdating()) setTextureState("working"); }}
+              onError={() => { if (sharing) return; setTextureState("failed"); setNotice("This video format or codec isn't supported by your browser."); sceneRef.current?.setVideo(null); }}
+              onEnded={() => setPlaying(false)} />
+          </div>
+
+          {!stereo && <>
+            <div className="t3-stage-label"><span className="t3-indicator" /> CINEMA 01 <i /> {seat.toUpperCase()} VIEW</div>
+            <div className="t3-stage-hint">DRAG TO LOOK <i /> SCROLL TO ZOOM <i /> SEATS 1–3 <i /> R RECENTER</div>
+            <nav className="t3-glass-menu" aria-label="Theater prototype sections" onPointerLeave={revealControls}>
+              <div className="t3-menu-brand"><span className="t3-menu-mark">W</span><span>WatchToGether<small>VIRTUAL THEATER · PREVIEW</small></span></div>
+              {([
+                ["chat", MessageSquare, "Chat"],
+                ["seats", Armchair, "Seats"],
+                ["moments", Bookmark, "Moments"],
+                ["settings", Settings2, "Settings"],
+              ] as const).map(([panel, Icon, label]) => <button type="button" key={panel} className={activePanel === panel ? "selected" : ""} aria-pressed={activePanel === panel} onClick={() => setActivePanel(activePanel === panel ? null : panel)}><Icon size={17} />{label}</button>)}
+              <Link to="/" className="t3-menu-exit"><ArrowLeft size={16} /> Classic Mode</Link>
+            </nav>
+            {activePanel && <aside className="t3-floating-panel" aria-label={`${activePanel} panel`} onPointerLeave={revealControls}>
+              <div className="t3-panel-heading"><div><span>{activePanel === "chat" ? "CONVERSATION" : activePanel === "seats" ? "YOUR VIEW" : activePanel === "moments" ? "HIGHLIGHTS" : "PREFERENCES"}</span><h2>{activePanel.charAt(0).toUpperCase() + activePanel.slice(1)}</h2></div><button type="button" onClick={() => setActivePanel(null)} aria-label="Close panel"><X size={16} /></button></div>
+              {activePanel === "chat" && <><div className="t3-demo-badge">DEMO LAYOUT · NO LIVE ROOM</div><div className="t3-demo-presence"><span className="t3-presence-dot" /> Mina <span className="t3-presence-dot second" /> Alex <span className="t3-presence-dot third" /> Chris</div><div className="t3-demo-message"><strong>Mina <small>sample</small></strong><p>This scene looks beautiful ✨</p></div><div className="t3-demo-message"><strong>Alex <small>sample</small></strong><p>Best seats in the house.</p></div><p className="t3-panel-note">Chat is a visual preview. Nothing here is sent or saved.</p></>}
+              {activePanel === "seats" && <><p className="t3-panel-intro">Choose a comfortable viewpoint. Drag the scene to look around.</p><div className="t3-panel-seat-list">{(["gallery", "center", "front"] as const).map((value) => <button type="button" key={value} className={seat === value ? "selected" : ""} onClick={() => pickSeat(value)}><Armchair size={17} /><span>{value === "center" ? "Center · recommended" : value === "gallery" ? "Gallery · wide view" : "Front · immersive"}</span>{seat === value && <span className="t3-seat-active">SELECTED</span>}</button>)}</div><button type="button" className="t3-panel-action" onClick={() => sceneRef.current?.recenter()}><RotateCcw size={14} /> Recenter view</button></>}
+              {activePanel === "moments" && <><div className="t3-demo-badge">DEMO LAYOUT · NO LIVE ROOM</div><p className="t3-panel-intro">Saved Cinema Moments will appear here when Virtual Theater joins a shared WatchToGether room.</p><p className="t3-panel-note">This standalone preview does not load or save moments.</p></>}
+              {activePanel === "settings" && <><div className="t3-panel-setting"><span>Render quality</span><div className="t3-segment">{(["low", "medium", "high"] as const).map((value) => <button type="button" key={value} className={quality === value ? "selected" : ""} onClick={() => { setQuality(value); sceneRef.current?.setQuality(value); }}>{value}</button>)}</div></div><div className="t3-panel-setting"><span>Head tracking</span><button type="button" className="t3-panel-action" onClick={enableMotion} disabled={motionState === "unavailable" || motionState === "requesting"}>{motionEnabled ? "Disable motion" : "Enable motion"}</button></div><div className="t3-panel-setting"><span>Stereo strength · {Math.round(eyeSep * 1000)} mm</span><input type="range" min={0.035} max={0.095} step={0.005} value={eyeSep} onChange={(event) => { const value = Number(event.target.value); setEyeSep(value); sceneRef.current?.setEyeSeparation(value); }} aria-label="Stereo eye separation" /></div><button type="button" className="t3-panel-action" onClick={() => sceneRef.current?.recenter()}><RotateCcw size={14} /> Recenter</button></>}
+            </aside>}
+            {showDiagnostics && <aside className="t3-diagnostics" aria-label="Theater diagnostics">
+              <div className="t3-diagnostics-title"><Gauge size={14} /> LIVE DIAGNOSTICS <button type="button" onClick={() => setShowDiagnostics(false)} aria-label="Hide diagnostics"><X size={13} /></button></div>
+              <dl>
+                <div><dt>Device</dt><dd>{device}</dd></div>
+                <div><dt>WebGL</dt><dd>{webgl}</dd></div>
+                <div><dt>Touch</dt><dd>{navigator.maxTouchPoints > 0 || "ontouchstart" in window ? "yes" : "no"}</dd></div>
+                <div><dt>Gyroscope</dt><dd>{motionState.replace("-", " ")}</dd></div>
+                <div><dt>Stereo</dt><dd>{webgl === "available" ? stereo ? "on" : "available" : "unavailable"}</dd></div>
+                <div><dt>Approx. FPS</dt><dd>{fps === null ? document.hidden ? "paused" : "—" : fps}</dd></div>
+                <div><dt>Quality</dt><dd>{quality}</dd></div>
+                <div><dt>Video texture</dt><dd>{textureState}</dd></div>
+                {videoDimensions && <div><dt>Source</dt><dd>{videoDimensions}</dd></div>}
+                <div className="t3-error-row"><dt>Last error</dt><dd>{renderError || "none"}</dd></div>
+              </dl>
+            </aside>}
+            {!showDiagnostics && <button type="button" className="t3-diagnostics-open" onClick={() => setShowDiagnostics(true)}><Info size={14} /> Diagnostics</button>}
+          </>}
+
+          {stereo && <div className="t3-vr-actions">
+            {[0, 1].map((eye) => <div className="t3-vr-eye" key={eye}>
+              <button type="button" onClick={() => sceneRef.current?.recenter()} aria-label="Recenter view"><RotateCcw size={16} /></button>
+              <button type="button" onClick={exitStereo} aria-label="Exit VR"><X size={17} /></button>
+            </div>)}
+          </div>}
+
+          {!stereo && <div className="t3-bottom" onPointerLeave={revealControls}>
+            <div className="t3-controls">
+              <div className="t3-player-meta"><strong>{videoName || "A private screening"}</strong><small>{sharing ? "LIVE SCREEN SHARE" : videoName ? "LOCAL FILE" : "DROP A VIDEO OR SHARE A TAB"}</small></div>
+              <input ref={fileInputRef} type="file" accept="video/*,.mp4,.webm,.mov,.m4v,.mkv" onChange={chooseFile} className="sr-only" aria-label="Choose a video file" />
+              <button type="button" className="t3-primary" onClick={() => fileInputRef.current?.click()}><Upload size={15} /> <span>Open video</span></button>
+              <button type="button" className={`t3-icon${sharing ? " t3-on" : ""}`} onClick={shareScreen} aria-pressed={sharing} title={sharing ? "Stop sharing" : "Share a tab or window"} aria-label={sharing ? "Stop sharing" : "Share a tab or window"}><MonitorUp size={17} /></button>
+              <button type="button" className="t3-icon" onClick={playVideo} disabled={!hasSource} aria-label={playing ? "Pause video" : "Play video"}>{playing ? <Pause size={18} /> : <Play size={18} />}</button>
+              <label className="t3-volume" aria-label="Video volume">{volume === 0 ? <VolumeX size={16} /> : <Volume2 size={16} />}<input type="range" min={0} max={1} step={0.01} value={volume} onChange={(event) => { const value = Number(event.target.value); setVolume(value); if (videoRef.current) videoRef.current.volume = value; }} /></label>
+              <span className="t3-divider" />
+              <button type="button" className="t3-icon" onClick={() => setActivePanel(activePanel === "seats" ? null : "seats")} aria-label="Choose seat" title="Choose seat"><Compass size={17} /></button>
+              <button type="button" className="t3-icon" onClick={toggleFullscreen} title="Fullscreen" aria-label={fullscreen ? "Exit fullscreen" : "Enter fullscreen"}>{fullscreen ? <Expand size={17} /> : <Maximize2 size={17} />}</button>
+              {xrSupported && <button type="button" className="t3-vr-button" onClick={inXR ? () => sceneRef.current?.exitXR() : enterHeadset} disabled={webgl !== "available"}><Headset size={17} /> <span>{inXR ? "Exit VR" : "Headset VR"}</span></button>}
+              <button type="button" className="t3-vr-button" onClick={enterStereo} disabled={webgl !== "available"}><Glasses size={17} /> <span>Phone VR</span></button>
+            </div>
+          </div>}
+          {!stereo && !controlsVisible && <button type="button" className="t3-reveal-controls" onClick={revealControls}>Show controls</button>}
+        </div>
+
+        {notice && !stereo && <div className="t3-notice" role="status">{notice}<button type="button" onClick={() => setNotice(null)} aria-label="Dismiss notice"><X size={14} /></button></div>}
+        {!stereo && <p className="t3-footnote">PREVIEW <span>·</span> Local videos and screen share only, not yet synced with rooms <span>·</span> Headset VR needs a WebXR browser (Quest, Vision Pro, PC VR)</p>}
+      </main>
+    </div>
+  );
+}
