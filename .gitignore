@@ -7,3 +7,9 @@ build
 .DS_Store
 server/prisma/dev.db
 server/prisma/dev.db-journal
+
+# Never commit secrets or local databases
+SMPT_PASS.txt
+*.pass
+*.db
+*.db-journal

@@ -1,21 +1,24 @@
-import { useEffect, type ReactNode } from "react";
+import { lazy, Suspense, useEffect, type ReactNode } from "react";
 import { BrowserRouter, Routes, Route, Navigate, useLocation } from "react-router-dom";
-import Home from "./pages/Home";
-import Login from "./pages/Login";
-import Signup from "./pages/Signup";
-import Dashboard from "./pages/Dashboard";
-import Room from "./pages/Room";
-import NotFound from "./pages/NotFound";
-import ForgotPassword from "./pages/ForgotPassword";
-import ResetPassword from "./pages/ResetPassword";
-import Settings from "./pages/Settings";
-import InviteAccept from "./pages/InviteAccept";
-import Replay from "./pages/Replay";
 import { rememberAvatars } from "./store/useAvatarStore";
 import Toaster from "./components/ui/Toaster";
 import { useAuthStore } from "./store/useAuthStore";
 import { useSocketStore } from "./store/useSocketStore";
 import api from "./lib/api";
+import Spinner from "./components/ui/Spinner";
+
+// Each page is its own chunk, so the landing page doesn't download the room, WebRTC and player code.
+const Home = lazy(() => import("./pages/Home"));
+const Login = lazy(() => import("./pages/Login"));
+const Signup = lazy(() => import("./pages/Signup"));
+const Dashboard = lazy(() => import("./pages/Dashboard"));
+const Room = lazy(() => import("./pages/Room"));
+const NotFound = lazy(() => import("./pages/NotFound"));
+const ForgotPassword = lazy(() => import("./pages/ForgotPassword"));
+const ResetPassword = lazy(() => import("./pages/ResetPassword"));
+const Settings = lazy(() => import("./pages/Settings"));
+const InviteAccept = lazy(() => import("./pages/InviteAccept"));
+const Replay = lazy(() => import("./pages/Replay"));
 
 function RequireAuth({ children }: { children: ReactNode }) {
   const user = useAuthStore((s) => s.user);
@@ -73,6 +76,7 @@ function App() {
     <BrowserRouter>
       <SessionSync />
       <div className="min-h-screen bg-ink-950 font-sans text-slate-50 selection:bg-indigo-500/30">
+        <Suspense fallback={<div className="grid min-h-screen place-items-center"><Spinner /></div>}>
         <Routes>
           <Route path="/" element={<Home />} />
           <Route path="/login" element={<GuestOnly><Login /></GuestOnly>} />
@@ -86,6 +90,7 @@ function App() {
           <Route path="/invite/:token" element={<RequireAuth><InviteAccept /></RequireAuth>} />
           <Route path="*" element={<NotFound />} />
         </Routes>
+        </Suspense>
       </div>
       <Toaster />
     </BrowserRouter>

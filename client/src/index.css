@@ -93,7 +93,32 @@
     @apply inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-[11px] font-medium;
   }
 
+  .text-gradient-cinema {
+    @apply bg-gradient-to-r from-indigo-300 via-violet-300 to-amber-200 bg-clip-text text-transparent;
+  }
+
+  .tilt-card {
+    transition: transform 200ms cubic-bezier(0.22, 1, 0.36, 1), background-color 200ms;
+    transform-style: preserve-3d;
+    will-change: transform;
+  }
+
   .text-gradient {
     @apply bg-gradient-to-r from-indigo-300 via-violet-300 to-cyan-300 bg-clip-text text-transparent;
+  }
+}
+
+/* Respect users who ask for less motion. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+  .tilt-card {
+    transform: none !important;
   }
 }

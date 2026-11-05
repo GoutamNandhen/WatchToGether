@@ -1,9 +1,11 @@
 import type { ReactNode } from "react";
 import Logo from "./ui/Logo";
+import ServerWakeBanner from "./ServerWakeBanner";
 
 export default function AuthLayout({ title, subtitle, children, footer }: { title: string; subtitle: string; children: ReactNode; footer: ReactNode }) {
   return (
     <div className="relative flex min-h-screen flex-col items-center justify-center px-4 py-10">
+      <ServerWakeBanner />
       <div className="pointer-events-none absolute inset-0 -z-10 overflow-hidden">
         <div className="absolute -top-32 left-1/2 h-[420px] w-[720px] -translate-x-1/2 rounded-full bg-indigo-600/20 blur-[120px]" />
       </div>
