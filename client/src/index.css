@@ -65,6 +65,13 @@
 }
 
 @layer components {
+  .no-scrollbar {
+    scrollbar-width: none;
+  }
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+
   .glass {
     @apply bg-white/[0.03] border border-white/[0.08] backdrop-blur-xl;
   }
@@ -86,7 +93,7 @@
   }
 
   .btn-primary {
-    @apply btn bg-gradient-to-r from-indigo-400 to-violet-400 text-ink-950 shadow-glow hover:from-indigo-300 hover:to-violet-300;
+    @apply btn bg-gradient-to-r from-indigo-500 to-violet-500 text-white shadow-glow hover:from-indigo-400 hover:to-violet-400;
   }
 
   .btn-secondary {
@@ -106,7 +113,7 @@
   }
 
   .text-gradient-cinema {
-    @apply bg-gradient-to-r from-indigo-200 via-indigo-400 to-fuchsia-400 bg-clip-text text-transparent;
+    @apply bg-gradient-to-r from-indigo-300 via-violet-300 to-fuchsia-300 bg-clip-text text-transparent;
   }
 
   .tilt-card {
@@ -116,7 +123,7 @@
   }
 
   .text-gradient {
-    @apply bg-gradient-to-r from-indigo-200 via-indigo-400 to-violet-400 bg-clip-text text-transparent;
+    @apply bg-gradient-to-r from-indigo-300 via-violet-300 to-cyan-300 bg-clip-text text-transparent;
   }
 }
 

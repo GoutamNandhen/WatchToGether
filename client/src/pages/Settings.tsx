@@ -12,7 +12,9 @@ import Spinner from "../components/ui/Spinner";
 import PasswordInput from "../components/PasswordInput";
 import { Link } from "react-router-dom";
 import { useEffect } from "react";
-import { Bell } from "lucide-react";
+import { Bell, Box } from "lucide-react";
+import { is3DEnabled, set3DEnabled } from "../lib/effects";
+import Backdrop from "../components/Backdrop";
 import { disablePush, enablePush, getPushStatus, type PushStatus } from "../lib/push";
 
 export default function Settings() {
@@ -100,7 +102,8 @@ export default function Settings() {
   };
 
   return (
-    <div className="min-h-screen">
+    <div className="grain min-h-screen">
+      <Backdrop density={0.7} />
       <header className="sticky top-0 z-40 border-b border-white/5 bg-ink-950/70 backdrop-blur-xl">
         <div className="mx-auto flex max-w-3xl items-center justify-between px-4 py-3 sm:px-6">
           <Logo to="/dashboard" size="sm" />
@@ -167,6 +170,7 @@ export default function Settings() {
         </section>
 
         <NotificationSettings />
+        <AppearanceSettings />
 
         <section className="card p-6">
           <h2 className="mb-5 flex items-center gap-2 font-display font-semibold"><KeyRound size={18} className="text-indigo-300" /> Password</h2>
@@ -253,6 +257,38 @@ function NotificationSettings() {
             {busy && <Spinner className="h-4 w-4" />} {status === "enabled" ? "Turn off" : "Turn on"}
           </button>
         )}
+      </div>
+    </section>
+  );
+}
+
+function AppearanceSettings() {
+  const [on, setOn] = useState(is3DEnabled);
+  const flip = () => {
+    const next = !on;
+    set3DEnabled(next);
+    setOn(next);
+    toast.success(next ? "3D effects on. Reloading…" : "3D effects off. Reloading…");
+    setTimeout(() => window.location.reload(), 600);
+  };
+  return (
+    <section className="card p-6">
+      <h2 className="mb-3 flex items-center gap-2 font-display font-semibold"><Box size={18} className="text-indigo-300" /> Appearance</h2>
+      <div className="flex items-center justify-between gap-4">
+        <div>
+          <p className="text-sm font-medium text-white">3D backgrounds</p>
+          <p className="text-sm text-slate-400">Animated 3D scenes behind pages. Turn off to save battery on older devices.</p>
+        </div>
+        <button
+          type="button"
+          role="switch"
+          aria-checked={on}
+          aria-label="3D backgrounds"
+          onClick={flip}
+          className={`relative h-7 w-12 shrink-0 rounded-full border transition-colors ${on ? "border-indigo-400/50 bg-indigo-500" : "border-white/10 bg-white/10"}`}
+        >
+          <span className={`absolute top-0.5 rounded-full bg-white shadow transition-all ${on ? "left-[22px]" : "left-0.5"}`} style={{ width: 22, height: 22 }} />
+        </button>
       </div>
     </section>
   );

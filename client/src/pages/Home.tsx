@@ -1,4 +1,4 @@
-import { lazy, Suspense, useRef, type MouseEvent, type ReactNode } from "react";
+import { lazy, Suspense } from "react";
 import { Link } from "react-router-dom";
 import {
   ArrowRight,
@@ -15,6 +15,7 @@ import {
   Volume2,
 } from "lucide-react";
 import Logo from "../components/ui/Logo";
+import Tilt from "../components/ui/Tilt";
 import ServerWakeBanner from "../components/ServerWakeBanner";
 import { useAuthStore } from "../store/useAuthStore";
 
@@ -46,30 +47,6 @@ const STEPS = [
   { n: "02", title: "Invite your crew", body: "Send a link, pick a friend group, or schedule it for later." },
   { n: "03", title: "Press play", body: "Everyone watches the same frame, sees each other and chats live." },
 ];
-
-/** Card that tilts toward the cursor for a little depth. */
-function TiltCard({ children }: { children: ReactNode }) {
-  const ref = useRef<HTMLDivElement>(null);
-  const onMove = (e: MouseEvent<HTMLDivElement>) => {
-    const el = ref.current;
-    if (!el) return;
-    const r = el.getBoundingClientRect();
-    const x = (e.clientX - r.left) / r.width - 0.5;
-    const y = (e.clientY - r.top) / r.height - 0.5;
-    el.style.transform = `perspective(900px) rotateX(${-y * 8}deg) rotateY(${x * 10}deg) translateZ(0)`;
-    el.style.setProperty("--mx", `${(x + 0.5) * 100}%`);
-    el.style.setProperty("--my", `${(y + 0.5) * 100}%`);
-  };
-  const onLeave = () => {
-    if (ref.current) ref.current.style.transform = "";
-  };
-  return (
-    <div ref={ref} onMouseMove={onMove} onMouseLeave={onLeave} className="tilt-card card group relative overflow-hidden p-6">
-      <div className="pointer-events-none absolute inset-0 opacity-0 transition-opacity duration-300 group-hover:opacity-100 [background:radial-gradient(420px_circle_at_var(--mx)_var(--my),rgba(245,181,68,0.14),transparent_45%)]" />
-      <div className="relative">{children}</div>
-    </div>
-  );
-}
 
 export default function Home() {
   const user = useAuthStore((s) => s.user);
@@ -160,13 +137,13 @@ export default function Home() {
           </div>
           <div className="mt-12 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {FEATURES.map(({ icon: Icon, title, body }) => (
-              <TiltCard key={title}>
-                <div className="mb-4 grid h-10 w-10 place-items-center rounded-xl bg-gradient-to-br from-indigo-500/25 to-fuchsia-600/15 text-indigo-200 ring-1 ring-white/10">
+              <Tilt key={title} className="card p-6">
+                <div className="mb-4 grid h-10 w-10 place-items-center rounded-xl bg-gradient-to-br from-indigo-500/25 to-fuchsia-500/15 text-indigo-200 ring-1 ring-white/10">
                   <Icon size={20} />
                 </div>
                 <h3 className="font-display font-semibold text-white">{title}</h3>
                 <p className="mt-1.5 text-sm leading-relaxed text-slate-400">{body}</p>
-              </TiltCard>
+              </Tilt>
             ))}
           </div>
         </section>
@@ -188,7 +165,7 @@ export default function Home() {
         </section>
 
         {/* ---------- Final CTA ---------- */}
-        <section className="relative mt-28 overflow-hidden rounded-3xl border border-white/10 bg-gradient-to-br from-indigo-600/30 via-violet-700/20 to-fuchsia-800/30 p-10 text-center sm:p-16">
+        <section className="relative mt-28 overflow-hidden rounded-3xl border border-white/10 bg-gradient-to-br from-indigo-600/30 via-violet-600/20 to-fuchsia-600/20 p-10 text-center sm:p-16">
           <div className="pointer-events-none absolute -top-24 left-1/2 h-64 w-[600px] -translate-x-1/2 rounded-full bg-white/10 blur-3xl" />
           <h2 className="relative font-display text-3xl font-bold tracking-tight sm:text-5xl">The seats are saved.</h2>
           <p className="relative mx-auto mt-4 max-w-md text-slate-300">Grab the popcorn and send the link. It takes ten seconds to open a room.</p>

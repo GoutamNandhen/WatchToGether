@@ -543,6 +543,8 @@ export function useWebRTC(roomId: string) {
       pendingCandidates.current = {};
       receivedStreams.current = {};
       stoppedScreenStreamIds.current = {};
+      // Intentional: bumping a request counter (not a DOM ref) to invalidate in-flight async work.
+      // eslint-disable-next-line react-hooks/exhaustive-deps
       mediaRequestId.current++;
       mediaPromise.current = null;
 

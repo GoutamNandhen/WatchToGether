@@ -76,7 +76,7 @@ function App() {
   return (
     <BrowserRouter>
       <SessionSync />
-      <div className="min-h-screen bg-ink-950 font-sans text-slate-50 selection:bg-indigo-500/30 selection:text-white">
+      <div className="min-h-screen font-sans text-slate-50 selection:bg-indigo-500/30">
         <Suspense fallback={<div className="grid min-h-screen place-items-center"><Spinner /></div>}>
         <Routes>
           <Route path="/" element={<Home />} />

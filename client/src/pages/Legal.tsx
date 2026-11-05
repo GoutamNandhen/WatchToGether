@@ -1,5 +1,6 @@
 import { Link } from "react-router-dom";
 import Logo from "../components/ui/Logo";
+import Backdrop from "../components/Backdrop";
 
 type Section = { heading: string; body: string[] };
 
@@ -61,6 +62,7 @@ export default function Legal({ kind }: { kind: "privacy" | "terms" }) {
   const title = kind === "privacy" ? "Privacy Policy" : "Terms of Use";
   return (
     <div className="grain min-h-screen">
+      <Backdrop density={0.6} />
       <header className="mx-auto flex max-w-3xl items-center justify-between px-4 py-5 sm:px-6">
         <Logo />
         <Link to={kind === "privacy" ? "/terms" : "/privacy"} className="btn-ghost text-xs">

@@ -9,6 +9,7 @@ import { useAuthStore } from "../store/useAuthStore";
 import { useSocketStore } from "../store/useSocketStore";
 import { toast } from "../store/useToastStore";
 import { copyToClipboard, greeting, timeAgo } from "../lib/format";
+import Backdrop from "../components/Backdrop";
 import Logo from "../components/ui/Logo";
 import Avatar from "../components/ui/Avatar";
 import Spinner from "../components/ui/Spinner";
@@ -366,6 +367,7 @@ export default function Dashboard() {
 
   return (
     <div className="grain min-h-screen">
+      <Backdrop density={0.8} />
       <div className="pointer-events-none fixed inset-0 -z-10">
         <div className="absolute -top-40 left-1/3 h-[420px] w-[720px] rounded-full bg-indigo-600/15 blur-[120px]" />
         <div className="absolute bottom-0 right-0 h-[360px] w-[360px] rounded-full bg-fuchsia-700/10 blur-[120px]" />
@@ -407,7 +409,7 @@ export default function Dashboard() {
           <form onSubmit={handleCreateRoom} className="card relative overflow-hidden p-6 animate-fade-up">
             <div className="pointer-events-none absolute -right-16 -top-16 h-48 w-48 rounded-full bg-indigo-500/20 blur-3xl" />
             <div className="mb-5 flex items-center gap-3">
-              <div className="grid h-10 w-10 place-items-center rounded-xl bg-gradient-to-br from-indigo-300 to-violet-500 text-ink-950 shadow-glow">
+              <div className="grid h-10 w-10 place-items-center rounded-xl bg-gradient-to-br from-indigo-500 to-violet-500 shadow-glow">
                 <Plus size={20} />
               </div>
               <div>

@@ -5,6 +5,7 @@ import { ArrowLeft, Bookmark, Clapperboard, MessageSquare } from "lucide-react";
 import api, { getErrorMessage } from "../lib/api";
 import type { CinemaMoment } from "../store/useSocketStore";
 import { formatClock, timeAgo } from "../lib/format";
+import Backdrop from "../components/Backdrop";
 import Logo from "../components/ui/Logo";
 import Avatar from "../components/ui/Avatar";
 import Spinner from "../components/ui/Spinner";
@@ -103,7 +104,8 @@ export default function Replay() {
   const seek = (t: number) => playerRef.current?.seekTo(t, "seconds");
 
   return (
-    <div className="min-h-screen">
+    <div className="grain min-h-screen">
+      <Backdrop density={0.5} />
       <header className="border-b border-white/5 bg-ink-950/70 backdrop-blur-xl">
         <div className="mx-auto flex max-w-6xl items-center justify-between px-4 py-3 sm:px-6">
           <Logo to="/dashboard" size="sm" />
