@@ -33,6 +33,14 @@ const FEATURES = [
   { icon: Users, title: "Made for friends", body: "Friend groups, one-click invites, scheduled parties and push notifications." },
 ];
 
+const FAQ = [
+  { q: "Is it free?", a: "Yes. Create rooms, invite friends and watch together at no cost." },
+  { q: "What can we watch?", a: "Anything on YouTube, most direct video links, a video file from your computer, or your whole screen. Load .srt or .vtt subtitles and everyone sees them." },
+  { q: "Does everyone need an account?", a: "Yes, a quick sign-up keeps rooms private and lets friends find each other. Invite links skip the room password." },
+  { q: "Does it work on phones?", a: "Watching, chat, voice and video all work in mobile browsers. Screen sharing needs Chrome, Edge or Firefox on a computer." },
+  { q: "How many people can join?", a: "The host sets a maximum per room. Video calls work best with a small group of friends." },
+];
+
 const STEPS = [
   { n: "01", title: "Create a room", body: "Public or locked with a password. You get a code like WT-1234." },
   { n: "02", title: "Invite your crew", body: "Send a link, pick a friend group, or schedule it for later." },
@@ -57,7 +65,7 @@ function TiltCard({ children }: { children: ReactNode }) {
   };
   return (
     <div ref={ref} onMouseMove={onMove} onMouseLeave={onLeave} className="tilt-card card group relative overflow-hidden p-6">
-      <div className="pointer-events-none absolute inset-0 opacity-0 transition-opacity duration-300 group-hover:opacity-100 [background:radial-gradient(420px_circle_at_var(--mx)_var(--my),rgba(139,124,246,0.16),transparent_45%)]" />
+      <div className="pointer-events-none absolute inset-0 opacity-0 transition-opacity duration-300 group-hover:opacity-100 [background:radial-gradient(420px_circle_at_var(--mx)_var(--my),rgba(245,181,68,0.14),transparent_45%)]" />
       <div className="relative">{children}</div>
     </div>
   );
@@ -67,14 +75,14 @@ export default function Home() {
   const user = useAuthStore((s) => s.user);
 
   return (
-    <div className="relative min-h-screen overflow-hidden">
+    <div className="grain relative min-h-screen overflow-hidden">
       <ServerWakeBanner />
 
       {/* ---------- 3D hero ---------- */}
       <section className="relative h-[100svh] min-h-[640px] w-full">
         <div className="pointer-events-none absolute inset-0">
           <div className="absolute -top-40 left-1/2 h-[520px] w-[900px] -translate-x-1/2 rounded-full bg-indigo-600/25 blur-[120px]" />
-          <div className="absolute bottom-0 right-0 h-[380px] w-[380px] rounded-full bg-amber-500/10 blur-[120px]" />
+          <div className="absolute bottom-0 right-0 h-[380px] w-[380px] rounded-full bg-fuchsia-700/15 blur-[120px]" />
         </div>
         <Suspense fallback={null}>
           <Hero3D className="absolute inset-0" />
@@ -99,7 +107,7 @@ export default function Home() {
         </header>
 
         <div className="relative z-10 mx-auto max-w-3xl px-4 pt-10 text-center sm:px-6 sm:pt-16 animate-fade-up">
-          <span className="chip mb-6 border-amber-400/30 bg-amber-500/10 text-amber-100">
+          <span className="chip mb-6 border-indigo-400/30 bg-indigo-500/10 text-indigo-100">
             <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 shadow-[0_0_8px] shadow-emerald-400" />
             Your private cinema, online
           </span>
@@ -153,7 +161,7 @@ export default function Home() {
           <div className="mt-12 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {FEATURES.map(({ icon: Icon, title, body }) => (
               <TiltCard key={title}>
-                <div className="mb-4 grid h-10 w-10 place-items-center rounded-xl bg-gradient-to-br from-indigo-500/25 to-amber-500/15 text-indigo-200 ring-1 ring-white/10">
+                <div className="mb-4 grid h-10 w-10 place-items-center rounded-xl bg-gradient-to-br from-indigo-500/25 to-fuchsia-600/15 text-indigo-200 ring-1 ring-white/10">
                   <Icon size={20} />
                 </div>
                 <h3 className="font-display font-semibold text-white">{title}</h3>
@@ -163,8 +171,24 @@ export default function Home() {
           </div>
         </section>
 
+        {/* ---------- FAQ ---------- */}
+        <section className="mx-auto mt-28 max-w-3xl">
+          <h2 className="text-center font-display text-3xl font-bold tracking-tight sm:text-4xl">Questions, answered</h2>
+          <div className="mt-10 space-y-3">
+            {FAQ.map((f) => (
+              <details key={f.q} className="card group p-5 [&_summary::-webkit-details-marker]:hidden">
+                <summary className="flex cursor-pointer list-none items-center justify-between gap-4 font-display font-semibold text-white">
+                  {f.q}
+                  <span className="grid h-7 w-7 shrink-0 place-items-center rounded-full border border-white/10 text-indigo-300 transition-transform group-open:rotate-45">+</span>
+                </summary>
+                <p className="mt-3 text-sm leading-relaxed text-slate-400">{f.a}</p>
+              </details>
+            ))}
+          </div>
+        </section>
+
         {/* ---------- Final CTA ---------- */}
-        <section className="relative mt-28 overflow-hidden rounded-3xl border border-white/10 bg-gradient-to-br from-indigo-600/30 via-violet-600/20 to-amber-500/20 p-10 text-center sm:p-16">
+        <section className="relative mt-28 overflow-hidden rounded-3xl border border-white/10 bg-gradient-to-br from-indigo-600/30 via-violet-700/20 to-fuchsia-800/30 p-10 text-center sm:p-16">
           <div className="pointer-events-none absolute -top-24 left-1/2 h-64 w-[600px] -translate-x-1/2 rounded-full bg-white/10 blur-3xl" />
           <h2 className="relative font-display text-3xl font-bold tracking-tight sm:text-5xl">The seats are saved.</h2>
           <p className="relative mx-auto mt-4 max-w-md text-slate-300">Grab the popcorn and send the link. It takes ten seconds to open a room.</p>
@@ -174,8 +198,15 @@ export default function Home() {
         </section>
       </main>
 
-      <footer className="border-t border-white/5 py-8 text-center text-xs text-slate-500">
-        © {new Date().getFullYear()} WatchTogether. Grab the popcorn.
+      <footer className="border-t border-white/5">
+        <div className="mx-auto flex max-w-6xl flex-col items-center justify-between gap-4 px-4 py-8 text-xs text-slate-500 sm:flex-row sm:px-6">
+          <span>© {new Date().getFullYear()} WatchTogether. Grab the popcorn.</span>
+          <nav className="flex items-center gap-5">
+            <Link to="/privacy" className="transition-colors hover:text-white">Privacy</Link>
+            <Link to="/terms" className="transition-colors hover:text-white">Terms</Link>
+            <a href="https://github.com/GoutamNandhen/WatchToGether" target="_blank" rel="noreferrer" className="transition-colors hover:text-white">GitHub</a>
+          </nav>
+        </div>
       </footer>
     </div>
   );

@@ -365,9 +365,10 @@ export default function Dashboard() {
   ];
 
   return (
-    <div className="min-h-screen">
+    <div className="grain min-h-screen">
       <div className="pointer-events-none fixed inset-0 -z-10">
         <div className="absolute -top-40 left-1/3 h-[420px] w-[720px] rounded-full bg-indigo-600/15 blur-[120px]" />
+        <div className="absolute bottom-0 right-0 h-[360px] w-[360px] rounded-full bg-fuchsia-700/10 blur-[120px]" />
       </div>
 
       <header className="sticky top-0 z-40 border-b border-white/5 bg-ink-950/70 backdrop-blur-xl">
@@ -393,8 +394,12 @@ export default function Dashboard() {
 
       <main className="mx-auto max-w-6xl px-4 py-8 sm:px-6">
         <section className="mb-8 animate-fade-up">
-          <p className="text-sm text-slate-400">{greeting()},</p>
-          <h1 className="font-display text-3xl font-bold tracking-tight sm:text-4xl">{user.name.split(" ")[0]} 👋</h1>
+          <p className="mb-2 inline-flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.25em] text-indigo-300/80">
+            <span className="h-1.5 w-1.5 rounded-full bg-fuchsia-500 shadow-[0_0_10px] shadow-fuchsia-500" /> Now showing
+          </p>
+          <h1 className="font-display text-3xl font-bold tracking-tight sm:text-5xl">
+            {greeting()}, <span className="text-gradient">{user.name.split(" ")[0]}</span>
+          </h1>
         </section>
 
         <section className="mb-10 grid gap-4 md:grid-cols-2">
@@ -402,7 +407,7 @@ export default function Dashboard() {
           <form onSubmit={handleCreateRoom} className="card relative overflow-hidden p-6 animate-fade-up">
             <div className="pointer-events-none absolute -right-16 -top-16 h-48 w-48 rounded-full bg-indigo-500/20 blur-3xl" />
             <div className="mb-5 flex items-center gap-3">
-              <div className="grid h-10 w-10 place-items-center rounded-xl bg-gradient-to-br from-indigo-500 to-violet-500 shadow-glow">
+              <div className="grid h-10 w-10 place-items-center rounded-xl bg-gradient-to-br from-indigo-300 to-violet-500 text-ink-950 shadow-glow">
                 <Plus size={20} />
               </div>
               <div>

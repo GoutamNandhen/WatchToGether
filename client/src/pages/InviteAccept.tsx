@@ -64,7 +64,7 @@ export default function InviteAccept() {
         info && (
           <div className="space-y-5">
             <div className="flex items-center gap-4 rounded-xl border border-white/10 bg-white/[0.03] p-4">
-              <div className="grid h-12 w-12 shrink-0 place-items-center rounded-xl bg-gradient-to-br from-indigo-500 to-violet-500 shadow-glow">
+              <div className="grid h-12 w-12 shrink-0 place-items-center rounded-xl bg-gradient-to-br from-indigo-300 to-violet-500 text-ink-950 shadow-glow">
                 <Ticket size={22} />
               </div>
               <div className="min-w-0">

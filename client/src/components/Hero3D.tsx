@@ -31,7 +31,7 @@ export default function Hero3D({ className = "" }: { className?: string }) {
     mount.appendChild(renderer.domElement);
 
     const scene = new THREE.Scene();
-    scene.fog = new THREE.Fog(0x06060b, 9, 26);
+    scene.fog = new THREE.Fog(0x0a0807, 9, 26);
 
     const camera = new THREE.PerspectiveCamera(isSmall ? 62 : 48, mount.clientWidth / mount.clientHeight, 0.1, 100);
     const camBase = new THREE.Vector3(0, 2.6, 9.5);
@@ -56,10 +56,10 @@ export default function Hero3D({ className = "" }: { className?: string }) {
           vec2 uv = vUv;
           float t = uTime * 0.25;
           // Drifting aurora-like "scene" in the brand colours.
-          vec3 indigo = vec3(0.39, 0.40, 0.95);
-          vec3 violet = vec3(0.62, 0.36, 0.96);
-          vec3 cyan   = vec3(0.13, 0.75, 0.90);
-          vec3 amber  = vec3(1.00, 0.68, 0.30);
+          vec3 indigo = vec3(0.96, 0.71, 0.27); // gold
+          vec3 violet = vec3(0.93, 0.42, 0.17); // copper
+          vec3 cyan   = vec3(0.90, 0.28, 0.30); // crimson
+          vec3 amber  = vec3(1.00, 0.93, 0.75); // highlight
           float w1 = sin(uv.x * 6.0 + t * 3.0) * 0.5 + 0.5;
           float w2 = sin(uv.y * 5.0 - t * 2.0 + uv.x * 3.0) * 0.5 + 0.5;
           vec3 col = mix(indigo, violet, w1);
@@ -72,7 +72,7 @@ export default function Hero3D({ className = "" }: { className?: string }) {
           // Progress bar along the bottom.
           float prog = step(0.06, uv.y) * step(uv.y, 0.075) * step(0.05, uv.x) * step(uv.x, 0.95);
           float filled = step(uv.x, 0.05 + 0.9 * fract(uTime * 0.02 + 0.42));
-          vec3 progCol = mix(vec3(0.25), vec3(0.75, 0.6, 1.0), filled);
+          vec3 progCol = mix(vec3(0.25), vec3(1.0, 0.85, 0.5), filled);
           vec3 outCol = col * vig * scan * bars * 1.15 + progCol * prog;
           gl_FragColor = vec4(outCol, 1.0);
         }
@@ -83,10 +83,10 @@ export default function Hero3D({ className = "" }: { className?: string }) {
     scene.add(screen);
 
     // Soft glow the screen throws into the room.
-    const screenLight = new THREE.PointLight(0x8b7cf6, 30, 18, 1.6);
+    const screenLight = new THREE.PointLight(0xf5a54a, 30, 18, 1.6);
     screenLight.position.set(0, 2.5, -3);
     scene.add(screenLight);
-    scene.add(new THREE.AmbientLight(0x2a2a48, 1.2));
+    scene.add(new THREE.AmbientLight(0x3a2620, 1.2));
     const rim = new THREE.DirectionalLight(0xffb36b, 0.6);
     rim.position.set(5, 6, 8);
     scene.add(rim);
@@ -94,7 +94,7 @@ export default function Hero3D({ className = "" }: { className?: string }) {
     // ---------- Floor ----------
     const floor = new THREE.Mesh(
       new THREE.PlaneGeometry(40, 40),
-      new THREE.MeshStandardMaterial({ color: 0x0b0b14, roughness: 0.9, metalness: 0.1 })
+      new THREE.MeshStandardMaterial({ color: 0x120e0c, roughness: 0.9, metalness: 0.1 })
     );
     floor.rotation.x = -Math.PI / 2;
     scene.add(floor);
@@ -103,7 +103,7 @@ export default function Hero3D({ className = "" }: { className?: string }) {
     const rows = isSmall ? 3 : 4;
     const perRow = isSmall ? 7 : 9;
     const seatGroup = new THREE.Group();
-    const seatMat = new THREE.MeshStandardMaterial({ color: 0x3b1d4f, roughness: 0.6, metalness: 0.15 });
+    const seatMat = new THREE.MeshStandardMaterial({ color: 0x6b1620, roughness: 0.55, metalness: 0.15 });
     const baseGeo = new THREE.BoxGeometry(0.9, 0.45, 0.85);
     const backGeo = new THREE.BoxGeometry(0.9, 0.9, 0.18);
     const bases = new THREE.InstancedMesh(baseGeo, seatMat, rows * perRow);
@@ -128,7 +128,7 @@ export default function Hero3D({ className = "" }: { className?: string }) {
     scene.add(seatGroup);
 
     // ---------- Friend avatars: glowing orbs in a few seats ----------
-    const avatarColors = [0x818cf8, 0xe879f9, 0x22d3ee, 0x34d399, 0xfbbf24];
+    const avatarColors = [0xf5b544, 0xf9666f, 0x5eead4, 0xfb8a4c, 0xa5b4fc];
     const picks = [perRow + 2, perRow + 4, perRow * 2 + 3, perRow + 6, perRow * 2 + 5].filter((n) => n < seatSpots.length);
     const avatars = picks.map((seatIdx, k) => {
       const color = avatarColors[k % avatarColors.length];
@@ -149,7 +149,7 @@ export default function Hero3D({ className = "" }: { className?: string }) {
     // ---------- Projector beam with drifting dust ----------
     const beam = new THREE.Mesh(
       new THREE.ConeGeometry(3.2, 14, 32, 1, true),
-      new THREE.MeshBasicMaterial({ color: 0xa5b4fc, transparent: true, opacity: 0.045, side: THREE.DoubleSide, depthWrite: false, blending: THREE.AdditiveBlending })
+      new THREE.MeshBasicMaterial({ color: 0xffe2a8, transparent: true, opacity: 0.05, side: THREE.DoubleSide, depthWrite: false, blending: THREE.AdditiveBlending })
     );
     // Tip at the projector behind the audience, widening toward the screen.
     beam.rotation.x = Math.PI / 2;
@@ -167,7 +167,7 @@ export default function Hero3D({ className = "" }: { className?: string }) {
     dustGeo.setAttribute("position", new THREE.BufferAttribute(dustPos, 3));
     const dust = new THREE.Points(
       dustGeo,
-      new THREE.PointsMaterial({ color: 0xc7d2fe, size: 0.035, transparent: true, opacity: 0.7, depthWrite: false, blending: THREE.AdditiveBlending })
+      new THREE.PointsMaterial({ color: 0xffe9c2, size: 0.035, transparent: true, opacity: 0.7, depthWrite: false, blending: THREE.AdditiveBlending })
     );
     scene.add(dust);
 

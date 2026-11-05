@@ -19,6 +19,7 @@ const ResetPassword = lazy(() => import("./pages/ResetPassword"));
 const Settings = lazy(() => import("./pages/Settings"));
 const InviteAccept = lazy(() => import("./pages/InviteAccept"));
 const Replay = lazy(() => import("./pages/Replay"));
+const Legal = lazy(() => import("./pages/Legal"));
 
 function RequireAuth({ children }: { children: ReactNode }) {
   const user = useAuthStore((s) => s.user);
@@ -75,7 +76,7 @@ function App() {
   return (
     <BrowserRouter>
       <SessionSync />
-      <div className="min-h-screen bg-ink-950 font-sans text-slate-50 selection:bg-indigo-500/30">
+      <div className="min-h-screen bg-ink-950 font-sans text-slate-50 selection:bg-indigo-500/30 selection:text-white">
         <Suspense fallback={<div className="grid min-h-screen place-items-center"><Spinner /></div>}>
         <Routes>
           <Route path="/" element={<Home />} />
@@ -88,6 +89,8 @@ function App() {
           <Route path="/room/:id" element={<RequireAuth><Room /></RequireAuth>} />
           <Route path="/room/:id/replay" element={<RequireAuth><Replay /></RequireAuth>} />
           <Route path="/invite/:token" element={<RequireAuth><InviteAccept /></RequireAuth>} />
+          <Route path="/privacy" element={<Legal kind="privacy" />} />
+          <Route path="/terms" element={<Legal kind="terms" />} />
           <Route path="*" element={<NotFound />} />
         </Routes>
         </Suspense>

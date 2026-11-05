@@ -20,7 +20,7 @@ export default function CountdownOverlay({ canCancel, roomId }: { canCancel: boo
     <div className="pointer-events-none absolute inset-0 z-[9550] grid place-items-center bg-black/55 backdrop-blur-[2px] animate-fade-in" role="status" aria-live="assertive">
       <div className="flex flex-col items-center">
         <p className="mb-2 text-sm font-semibold uppercase tracking-[0.3em] text-indigo-200">Starting in</p>
-        <span key={remaining} className="font-display text-[9rem] font-extrabold leading-none text-white drop-shadow-[0_0_40px_rgba(129,140,248,0.7)] animate-scale-in">
+        <span key={remaining} className="font-display text-[9rem] font-extrabold leading-none text-white drop-shadow-[0_0_40px_rgba(245,181,68,0.7)] animate-scale-in">
           {remaining}
         </span>
         {canCancel && (

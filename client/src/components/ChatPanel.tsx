@@ -815,7 +815,7 @@ function ChatMessage({
           <div
             className={`whitespace-pre-wrap break-words rounded-2xl px-3 py-2 text-sm leading-relaxed ${
               isMe
-                ? "rounded-tr-md bg-gradient-to-br from-indigo-500 to-violet-500 text-white"
+                ? "rounded-tr-md bg-gradient-to-br from-indigo-600 to-violet-600 text-white"
                 : mentionsMe
                   ? "rounded-tl-md bg-amber-400/10 text-slate-100 ring-1 ring-amber-400/40"
                   : "rounded-tl-md bg-white/[0.06] text-slate-200"
