@@ -260,6 +260,8 @@ export default function Room() {
 
     return () => {
       cancelled = true;
+      // Intentional: bumping a request counter (not a DOM ref) to invalidate in-flight async work.
+      // eslint-disable-next-line react-hooks/exhaustive-deps
       joinAttemptRef.current++;
       joinMediaPromiseRef.current = null;
       if (id && user) {

@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { ArrowDown, Bookmark, ChevronDown, ChevronRight, ChevronUp, Clock, Crown, History, ListPlus, ListVideo, MessageSquare, Mic2, Play, SendHorizonal, Settings, Share2, Shield, ShieldOff, SkipForward, Trash2, Users, UserX, X } from "lucide-react";
+import { ArrowDown, Bookmark, ChevronDown, ChevronUp, Clock, Crown, History, ListPlus, ListVideo, MessageSquare, Mic2, PanelRightClose, Play, SendHorizonal, Settings, Share2, Shield, ShieldOff, SkipForward, Trash2, Users, UserX, X } from "lucide-react";
 import { mentionsUser, useSocketStore, type CinemaMoment, type Message, type QueueItem } from "../store/useSocketStore";
 import { useAudioStore } from "../store/useAudioStore";
 import { PollCard, PollComposer } from "./Polls";
@@ -276,7 +276,8 @@ export default function ChatPanel({
       }
     >
       <div className="flex items-center justify-between gap-2 border-b border-white/5 px-3 py-2.5">
-        <div className={`flex rounded-lg bg-white/[0.04] p-0.5 ${embedded ? "flex-1" : ""}`} role="tablist">
+        {/* min-w-0 + scroll keeps the action buttons (incl. close) from being pushed off a narrow panel */}
+        <div className={`no-scrollbar flex min-w-0 overflow-x-auto rounded-lg bg-white/[0.04] p-0.5 ${embedded ? "flex-1" : ""}`} role="tablist">
           {([
             { id: "chat", label: "Chat", icon: MessageSquare, show: true },
             { id: "moments", label: "Moments", icon: Bookmark, show: true },
@@ -289,7 +290,7 @@ export default function ChatPanel({
               role="tab"
               aria-selected={tab === id}
               onClick={() => setTab(id)}
-              className={`relative flex items-center justify-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-semibold transition-colors ${embedded ? "flex-1 py-2" : ""} ${tab === id ? "bg-white/10 text-white" : "text-slate-400 hover:text-slate-200"}`}
+              className={`relative flex shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-md px-2.5 py-1.5 text-xs font-semibold transition-colors ${embedded ? "flex-1 py-2" : ""} ${tab === id ? "bg-white/10 text-white" : "text-slate-400 hover:text-slate-200"}`}
               aria-label={id === "people" ? `People, ${people.length}` : id === "cameras" ? `Cameras, ${label}` : undefined}
             >
               <Icon size={13} /> {label}
@@ -301,15 +302,15 @@ export default function ChatPanel({
             </button>
           ))}
         </div>
-        <div className={`flex items-center gap-0.5 ${embedded ? "hidden" : ""}`}>
+        <div className={`flex shrink-0 items-center gap-0.5 ${embedded ? "hidden" : ""}`}>
           <button onClick={onOpenInvite} className="btn-ghost px-2 py-1.5" title="Invite people" aria-label="Invite people">
             <Share2 size={16} />
           </button>
           <button onClick={onOpenSettings} className="btn-ghost px-2 py-1.5" title="Audio settings" aria-label="Audio settings">
             <Settings size={16} />
           </button>
-          <button onClick={onClose} className="btn-ghost px-2 py-1.5" title="Close panel" aria-label="Close panel">
-            <ChevronRight size={18} />
+          <button onClick={onClose} className="btn-ghost ml-0.5 border border-white/10 px-2 py-1.5" title="Hide panel (C)" aria-label="Hide panel">
+            <PanelRightClose size={16} />
           </button>
         </div>
       </div>
