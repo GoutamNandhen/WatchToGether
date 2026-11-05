@@ -21,6 +21,13 @@ const InviteAccept = lazy(() => import("./pages/InviteAccept"));
 const Replay = lazy(() => import("./pages/Replay"));
 const Legal = lazy(() => import("./pages/Legal"));
 
+// Only local development and Vercel preview deployments include the lab.
+// Vercel branch previews ("-git-" in the host) also get it, so PR previews can be tried on a phone or headset.
+const isVercelPreview = typeof window !== "undefined" && window.location.hostname.includes("-git-");
+const TheaterLab = import.meta.env.DEV || import.meta.env.VITE_THEATER_LAB_PREVIEW === "true" || isVercelPreview
+  ? lazy(() => import("./components/theaterLab/TheaterLab"))
+  : null;
+
 function RequireAuth({ children }: { children: ReactNode }) {
   const user = useAuthStore((s) => s.user);
   const location = useLocation();
@@ -88,6 +95,7 @@ function App() {
           <Route path="/dashboard" element={<RequireAuth><Dashboard /></RequireAuth>} />
           <Route path="/room/:id" element={<RequireAuth><Room /></RequireAuth>} />
           <Route path="/room/:id/replay" element={<RequireAuth><Replay /></RequireAuth>} />
+          {TheaterLab && <Route path="/theater-lab" element={<Suspense fallback={<div className="p-8 text-center text-slate-400">Preparing the theater…</div>}><TheaterLab /></Suspense>} />}
           <Route path="/invite/:token" element={<RequireAuth><InviteAccept /></RequireAuth>} />
           <Route path="/privacy" element={<Legal kind="privacy" />} />
           <Route path="/terms" element={<Legal kind="terms" />} />
