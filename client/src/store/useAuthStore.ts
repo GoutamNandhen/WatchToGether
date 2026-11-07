@@ -5,6 +5,8 @@ export interface User {
   email: string;
   name: string;
   avatarVersion?: number | null;
+  /** Joined from an invite link without an account. */
+  isGuest?: boolean;
 }
 
 interface AuthState {

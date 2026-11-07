@@ -395,6 +395,12 @@ export default function Dashboard() {
       </header>
 
       <main className="mx-auto max-w-6xl px-4 py-8 sm:px-6">
+        {user?.isGuest && (
+          <div className="mb-6 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-indigo-400/30 bg-indigo-500/10 px-4 py-3 text-sm">
+            <span className="text-indigo-100">You're watching as a guest. Save your account to host parties and add friends.</span>
+            <Link to="/settings" className="btn-primary px-3 py-1.5 text-xs">Save account</Link>
+          </div>
+        )}
         <section className="mb-8 animate-fade-up">
           <p className="mb-2 inline-flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.25em] text-indigo-300/80">
             <span className="h-1.5 w-1.5 rounded-full bg-fuchsia-500 shadow-[0_0_10px] shadow-fuchsia-500" /> Now showing

@@ -3,7 +3,8 @@ import bcrypt from "bcrypt";
 import crypto from "crypto";
 import { PrismaClient } from "@prisma/client";
 import { z } from "zod";
-import { AuthRequest, invalidateAuthCache, signAuthToken } from "../middlewares/authMiddleware";
+import { AuthRequest, invalidateAuthCache, signAuthToken, GUEST_EMAIL_DOMAIN, isGuestEmail } from "../middlewares/authMiddleware";
+import { findUsableLink } from "./inviteLinks";
 import { escapeHtml } from "../utils/escapeHtml";
 import { getClientUrl, sendMail } from "../utils/mailer";
 import { disconnectUserSockets } from "../socket";
@@ -28,6 +29,7 @@ const publicUser = (user: { id: string; email: string; name: string; avatarUpdat
   email: user.email,
   name: user.name,
   avatarVersion: user.avatarUpdatedAt ? user.avatarUpdatedAt.getTime() : null,
+  isGuest: isGuestEmail(user.email),
 });
 
 // Emails are stored lowercased now, but older accounts may have mixed case.
@@ -324,5 +326,79 @@ export const resetPassword = async (req: Request, res: Response): Promise<void> 
   } catch (error) {
     console.error("Reset Password Error:", error);
     res.status(500).json({ error: "Internal server error" });
+  }
+};
+
+const guestSchema = z.object({
+  name: z.string().trim().min(1, "Enter a name so friends know who you are").max(40, "Name is too long"),
+  inviteToken: z.string().min(10).max(200),
+});
+
+/** Join from an invite link with just a display name. The guest can claim a real account later. */
+export const createGuest = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const parsed = guestSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: parsed.error.issues[0].message });
+      return;
+    }
+    const { link, reason } = await findUsableLink(parsed.data.inviteToken);
+    if (!link || reason) {
+      res.status(link ? 410 : 404).json({ error: reason || "This invite link doesn't work" });
+      return;
+    }
+    // Unguessable, never-shown password: guests can only sign in with the token they get now.
+    const passwordHash = await bcrypt.hash(crypto.randomBytes(32).toString("hex"), 10);
+    const user = await prisma.user.create({
+      data: { email: `${crypto.randomUUID()}@${GUEST_EMAIL_DOMAIN}`, passwordHash, name: parsed.data.name },
+    });
+    res.status(201).json({ user: publicUser(user), token: signAuthToken(user.id) });
+  } catch (error) {
+    console.error("Create Guest Error:", error);
+    res.status(500).json({ error: "An unexpected error occurred. Please try again later." });
+  }
+};
+
+const claimSchema = z.object({
+  name: z.string().trim().min(1).max(100).optional(),
+  email: z.string().trim().toLowerCase().pipe(z.string().email("Invalid email address")),
+  password: passwordSchema,
+});
+
+/** Turns a guest into a full account, keeping their rooms, chat and history. */
+export const claimGuest = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const parsed = claimSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: parsed.error.issues[0].message });
+      return;
+    }
+    const current = await prisma.user.findUnique({ where: { id: req.userId! } });
+    if (!current) {
+      res.status(401).json({ error: "Unauthorized" });
+      return;
+    }
+    if (!isGuestEmail(current.email)) {
+      res.status(400).json({ error: "This account is already saved" });
+      return;
+    }
+    if (isGuestEmail(parsed.data.email) || (await findUserByEmail(parsed.data.email))) {
+      res.status(400).json({ error: "Email already in use" });
+      return;
+    }
+    const user = await prisma.user.update({
+      where: { id: current.id },
+      data: {
+        email: parsed.data.email,
+        passwordHash: await bcrypt.hash(parsed.data.password, 10),
+        ...(parsed.data.name ? { name: parsed.data.name } : {}),
+        passwordChangedAt: new Date(),
+      },
+    });
+    invalidateAuthCache(user.id);
+    res.status(200).json({ user: publicUser(user), token: signAuthToken(user.id) });
+  } catch (error) {
+    console.error("Claim Guest Error:", error);
+    res.status(500).json({ error: "An unexpected error occurred. Please try again later." });
   }
 };
