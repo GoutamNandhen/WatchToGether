@@ -1,8 +1,20 @@
+import { initMonitoring, captureError, flushMonitoring } from "./infra/monitoring";
 import dotenv from "dotenv";
 import { startReminderScheduler } from "./managers/ReminderScheduler";
 import { initRedis } from "./infra/redis";
 
 dotenv.config();
+initMonitoring();
+
+process.on("unhandledRejection", (reason) => {
+  console.error("Unhandled promise rejection:", reason);
+  captureError(reason, { kind: "unhandledRejection" });
+});
+process.on("uncaughtException", (err) => {
+  console.error("Uncaught exception:", err);
+  captureError(err, { kind: "uncaughtException" });
+  void flushMonitoring().finally(() => process.exit(1));
+});
 
 if (!process.env.JWT_SECRET) {
   console.error("FATAL ERROR: JWT_SECRET environment variable is not defined.");

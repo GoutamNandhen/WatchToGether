@@ -1,3 +1,4 @@
+import { captureError } from "./infra/monitoring";
 import { Server, Socket } from "socket.io";
 import { Prisma, PrismaClient } from "@prisma/client";
 import { verifyAuthToken } from "./middlewares/authMiddleware";
@@ -297,6 +298,7 @@ export const setupSocketHandlers = (io: Server, gracePeriodOrManager?: number | 
         }
       } catch (err) {
         console.error("Error in join_room:", err);
+        captureError(err, { event: "join_room" });
         socket.emit("error", { message: "Internal server error joining room" });
       }
     });

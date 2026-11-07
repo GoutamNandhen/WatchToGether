@@ -11,6 +11,14 @@
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Sora:wght@600;700;800&display=swap" rel="stylesheet" />
+    <!-- Wake the API (it sleeps when idle) before the app bundle even downloads. -->
+    <script>
+      (function () {
+        var api = "%VITE_API_URL%";
+        if (api.indexOf("http") !== 0) return;
+        try { fetch(api + "/api/health", { mode: "no-cors", cache: "no-store" }); } catch (e) {}
+      })();
+    </script>
     <title>WatchTogether · Movie night, wherever you are</title>
     <link rel="canonical" href="https://watch-to-gether.vercel.app/" />
     <!-- Link previews on WhatsApp, Discord, X, iMessage -->
