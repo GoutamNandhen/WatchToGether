@@ -1,7 +1,8 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { Lock, Ticket } from "lucide-react";
 import api, { getErrorMessage } from "../lib/api";
+import { useAuthStore } from "../store/useAuthStore";
 import AuthLayout from "../components/AuthLayout";
 import Spinner from "../components/ui/Spinner";
 
@@ -18,6 +19,9 @@ export default function InviteAccept() {
   const [info, setInfo] = useState<InviteInfo | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [joining, setJoining] = useState(false);
+  const user = useAuthStore((s) => s.user);
+  const setAuth = useAuthStore((s) => s.setAuth);
+  const [guestName, setGuestName] = useState("");
 
   useEffect(() => {
     let cancelled = false;
@@ -45,13 +49,29 @@ export default function InviteAccept() {
     }
   };
 
+  /** No account? Join with just a name; the guest can save a real account later in Settings. */
+  const joinAsGuest = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!guestName.trim()) return;
+    setJoining(true);
+    try {
+      const guest = await api.post("/auth/guest", { name: guestName.trim(), inviteToken: token });
+      setAuth(guest.data.user, guest.data.token);
+      const res = await api.post(`/invites/${token}/accept`, null, { headers: { Authorization: `Bearer ${guest.data.token}` } });
+      navigate(`/room/${res.data.roomId}`, { replace: true });
+    } catch (err) {
+      setError(getErrorMessage(err, "Couldn't join right now"));
+      setJoining(false);
+    }
+  };
+
   const problem = error ?? (info && !info.valid ? info.reason : null);
 
   return (
     <AuthLayout
       title="You're invited"
       subtitle="Someone shared a watch party with you."
-      footer={<Link to="/dashboard" className="font-medium text-indigo-300 hover:text-indigo-200">Go to your dashboard</Link>}
+      footer={user ? <Link to="/dashboard" className="font-medium text-indigo-300 hover:text-indigo-200">Go to your dashboard</Link> : <Link to="/" className="font-medium text-indigo-300 hover:text-indigo-200">What is WatchTogether?</Link>}
     >
       {!info && !error ? (
         <div className="grid h-32 place-items-center text-slate-500"><Spinner /></div>
@@ -77,9 +97,24 @@ export default function InviteAccept() {
                 )}
               </div>
             </div>
-            <button onClick={accept} disabled={joining} className="btn-primary w-full py-3">
-              {joining ? <Spinner className="h-4 w-4" /> : null} Join watch party
-            </button>
+            {user ? (
+              <button onClick={accept} disabled={joining} className="btn-primary w-full py-3">
+                {joining ? <Spinner className="h-4 w-4" /> : null} Join watch party
+              </button>
+            ) : (
+              <form onSubmit={joinAsGuest} className="space-y-3">
+                <label className="label" htmlFor="guest-name">Your name</label>
+                <input id="guest-name" className="input" autoFocus maxLength={40} placeholder="What should friends call you?" value={guestName} onChange={(e) => setGuestName(e.target.value)} />
+                <button type="submit" disabled={joining || !guestName.trim()} className="btn-primary w-full py-3">
+                  {joining ? <Spinner className="h-4 w-4" /> : null} Join as guest
+                </button>
+                <p className="text-center text-xs text-slate-500">
+                  Have an account? <Link to="/login" state={{ from: `/invite/${token}` }} className="font-medium text-indigo-300 hover:text-indigo-200">Sign in</Link>
+                  {" "}or{" "}
+                  <Link to="/signup" state={{ from: `/invite/${token}` }} className="font-medium text-indigo-300 hover:text-indigo-200">create one</Link>
+                </p>
+              </form>
+            )}
             <p className="text-center text-xs text-slate-500">
               Link expires {new Date(info.expiresAt).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}
             </p>

@@ -1,6 +1,6 @@
 import { Router, Request } from "express";
 import { createRoom, getRooms, getRoomById, deleteRoom, inviteRoom, joinRoom, getRoomHistory, removeRoomHistory, endRoom, updateRoom, getUpcomingRooms, getRoomBans, unbanUser, inviteGroup, listReplays, getReplay, listCinemaMoments } from "../controllers/room";
-import { authenticate, AuthRequest } from "../middlewares/authMiddleware";
+import { authenticate, requireFullAccount, AuthRequest } from "../middlewares/authMiddleware";
 import { rateLimit } from "../middlewares/rateLimit";
 import { createInviteLink, listInviteLinks, revokeInviteLink } from "../controllers/inviteLinks";
 
@@ -23,7 +23,7 @@ const joinAttempts = rateLimit({ name: "room-join",
 const createLimit = rateLimit({ name: "room-create", windowMs: HOUR, max: 30, key: byUser, message: "You're creating rooms too quickly. Try again later." });
 const inviteLimit = rateLimit({ name: "room-invite", windowMs: HOUR, max: 30, key: byUser, message: "You've sent a lot of invitations. Try again later." });
 
-router.post("/", authenticate, createLimit, createRoom);
+router.post("/", authenticate, requireFullAccount, createLimit, createRoom);
 router.post("/join", authenticate, joinAttempts, joinRoom);
 router.get("/", authenticate, getRooms);
 router.get("/history", authenticate, getRoomHistory);
@@ -32,15 +32,15 @@ router.delete("/history/:id", authenticate, removeRoomHistory);
 router.get("/:id", authenticate, getRoomById);
 router.patch("/:id", authenticate, updateRoom);
 router.delete("/:id", authenticate, deleteRoom);
-router.post("/:id/invite", authenticate, inviteLimit, inviteRoom);
-router.post("/:id/invite-group", authenticate, inviteLimit, inviteGroup);
+router.post("/:id/invite", authenticate, requireFullAccount, inviteLimit, inviteRoom);
+router.post("/:id/invite-group", authenticate, requireFullAccount, inviteLimit, inviteGroup);
 router.post("/:id/end", authenticate, endRoom);
 router.get("/:id/bans", authenticate, getRoomBans);
 router.get("/:id/replays", authenticate, listReplays);
 router.get("/:id/replay", authenticate, getReplay);
 router.get("/:id/moments", authenticate, listCinemaMoments);
 router.get("/:id/invite-links", authenticate, listInviteLinks);
-router.post("/:id/invite-links", authenticate, inviteLimit, createInviteLink);
+router.post("/:id/invite-links", authenticate, requireFullAccount, inviteLimit, createInviteLink);
 router.delete("/:id/invite-links/:linkId", authenticate, revokeInviteLink);
 router.delete("/:id/bans/:userId", authenticate, unbanUser);
 

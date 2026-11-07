@@ -46,6 +46,34 @@ export const verifyAuthToken = async (token: string): Promise<string | null> => 
   return decoded.userId;
 };
 
+/** Guests join from an invite link with just a name. Their placeholder email uses a reserved TLD. */
+export const GUEST_EMAIL_DOMAIN = "guest.watchtogether.invalid";
+export const isGuestEmail = (email: string) => email.toLowerCase().endsWith(`@${GUEST_EMAIL_DOMAIN}`);
+
+/** Blocks guest accounts from actions that need a real account (hosting, friends, invites). */
+export const requireFullAccount = async (req: AuthRequest, res: Response, next: NextFunction): Promise<void> => {
+  try {
+    const user = await prisma.user.findUnique({ where: { id: req.userId! }, select: { email: true } });
+    if (user && isGuestEmail(user.email)) {
+      res.status(403).json({ error: "Create a free account to do this. It only takes a few seconds.", code: "GUEST_ACCOUNT" });
+      return;
+    }
+  } catch (err) {
+    console.error("Account check failed:", err);
+  }
+  next();
+};
+
+/** Sets req.userId when a valid token is present, but never rejects. */
+export const optionalAuth = async (req: AuthRequest, _res: Response, next: NextFunction): Promise<void> => {
+  const authHeader = req.headers.authorization;
+  if (authHeader?.startsWith("Bearer ")) {
+    const userId = await verifyAuthToken(authHeader.split(" ")[1]);
+    if (userId) req.userId = userId;
+  }
+  next();
+};
+
 export const signAuthToken = (userId: string) =>
   jwt.sign({ userId }, process.env.JWT_SECRET as string, { expiresIn: "7d" });
 

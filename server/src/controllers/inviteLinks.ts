@@ -100,7 +100,7 @@ export const revokeInviteLink = async (req: AuthRequest, res: Response): Promise
   }
 };
 
-const findUsableLink = async (token: string) => {
+export const findUsableLink = async (token: string) => {
   const link = await prisma.roomInviteLink.findUnique({
     where: { tokenHash: hashToken(token) },
     include: { room: { select: { id: true, name: true, displayId: true, isPrivate: true, hostId: true, host: { select: { name: true } } } } },

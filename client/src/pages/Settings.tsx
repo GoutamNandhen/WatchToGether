@@ -10,6 +10,7 @@ import Logo from "../components/ui/Logo";
 import Avatar from "../components/ui/Avatar";
 import Spinner from "../components/ui/Spinner";
 import PasswordInput from "../components/PasswordInput";
+import SaveGuestAccount from "../components/SaveGuestAccount";
 import { Link } from "react-router-dom";
 import { useEffect } from "react";
 import { Bell, Box } from "lucide-react";
@@ -160,7 +161,7 @@ export default function Settings() {
               </div>
               <div>
                 <span className="label">Email</span>
-                <p className="text-sm text-slate-300">{user.email}</p>
+                <p className="text-sm text-slate-300">{user.isGuest ? "Guest — no email yet" : user.email}</p>
               </div>
               <button type="submit" disabled={savingName || !name.trim() || name.trim() === user.name} className="btn-primary">
                 {savingName && <Spinner className="h-4 w-4" />} Save profile
@@ -169,10 +170,11 @@ export default function Settings() {
           </div>
         </section>
 
+        <SaveGuestAccount />
         <NotificationSettings />
         <AppearanceSettings />
 
-        <section className="card p-6">
+        {!user.isGuest && <section className="card p-6">
           <h2 className="mb-5 flex items-center gap-2 font-display font-semibold"><KeyRound size={18} className="text-indigo-300" /> Password</h2>
           <form onSubmit={changePassword} className="grid gap-4 sm:max-w-sm">
             <div>
@@ -192,7 +194,7 @@ export default function Settings() {
               {savingPassword && <Spinner className="h-4 w-4" />} Change password
             </button>
           </form>
-        </section>
+        </section>}
         <BuildInfo />
       </main>
     </div>

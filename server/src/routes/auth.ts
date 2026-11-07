@@ -1,6 +1,6 @@
 import { Router } from "express";
 import {
-  register, login, me, updateProfile, uploadAvatar, removeAvatar, changePassword, forgotPassword, resetPassword,
+  register, login, me, updateProfile, createGuest, claimGuest, uploadAvatar, removeAvatar, changePassword, forgotPassword, resetPassword,
 } from "../controllers/auth";
 import { authenticate, AuthRequest } from "../middlewares/authMiddleware";
 import { rateLimit, clientIp, emailKey } from "../middlewares/rateLimit";
@@ -21,6 +21,9 @@ const passwordChangePerUser = rateLimit({ name: "password-change", windowMs: FIF
 
 router.post("/register", registerPerIp, register);
 router.post("/login", loginPerIp, loginPerAccount, login);
+const guestPerIp = rateLimit({ name: "guest-ip", windowMs: HOUR, max: 15, key: clientIp, message: "Too many guest joins from this network. Try again later." });
+router.post("/guest", guestPerIp, createGuest);
+router.post("/me/claim", authenticate, registerPerIp, claimGuest);
 router.post("/forgot-password", forgotPerIp, forgotPerAccount, forgotPassword);
 router.post("/reset-password", resetPerIp, resetPassword);
 router.get("/me", authenticate, me);

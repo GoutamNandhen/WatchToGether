@@ -88,7 +88,7 @@ function App() {
           <Route path="/dashboard" element={<RequireAuth><Dashboard /></RequireAuth>} />
           <Route path="/room/:id" element={<RequireAuth><Room /></RequireAuth>} />
           <Route path="/room/:id/replay" element={<RequireAuth><Replay /></RequireAuth>} />
-          <Route path="/invite/:token" element={<RequireAuth><InviteAccept /></RequireAuth>} />
+          <Route path="/invite/:token" element={<InviteAccept />} />
           <Route path="/privacy" element={<Legal kind="privacy" />} />
           <Route path="/terms" element={<Legal kind="terms" />} />
           <Route path="*" element={<NotFound />} />
