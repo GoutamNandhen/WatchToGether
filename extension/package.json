@@ -1,0 +1,16 @@
+{
+  "name": "watchtogether-extension",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Sync Netflix, Disney+ Hotstar, Prime Video and more with a WatchTogether room. Everyone streams from their own account.",
+  "scripts": {
+    "build": "node build.mjs",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.0.287",
+    "esbuild": "^0.24.0",
+    "socket.io-client": "^4.8.3",
+    "typescript": "^5.6.3"
+  }
+}
