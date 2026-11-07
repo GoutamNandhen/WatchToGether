@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, forwardRef, useImperativeHandle, useCallback } from "react";
 import ReactPlayer from "react-player";
+import { streamingService, EXTENSION_HELP_URL } from "../lib/streaming";
 import { useSocketStore } from "../store/useSocketStore";
 import { useAudioStore } from "../store/useAudioStore";
 import { Captions, CaptionsOff, FileText, Timer, TimerOff, FileVideo, Link2, MonitorPlay, MonitorUp, RefreshCcw, Square, X } from "lucide-react";
@@ -758,7 +759,21 @@ const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(({ roomId, isFu
       )}
 
       <div inert={!!breakState} className={`flex-1 overflow-hidden relative bg-black flex items-center justify-center transition-all duration-300 ${isFullscreen || compact ? '' : 'rounded-2xl shadow-2xl ring-1 ring-white/10'}`}>
-        {url ? (
+        {url && streamingService(url) ? (
+          <div className="flex h-full max-w-md flex-col items-center justify-center px-6 text-center">
+            <div className="mb-4 grid h-20 w-20 place-items-center rounded-3xl bg-gradient-to-br from-indigo-500/30 to-fuchsia-500/20 ring-1 ring-white/10">
+              <MonitorPlay size={36} className="text-indigo-200" />
+            </div>
+            <p className="font-display text-lg font-semibold text-white">Watching on {streamingService(url)}</p>
+            <p className="mt-2 text-sm text-slate-400">
+              Open it on your own account. The WatchTogether Sync extension keeps everyone on the same second, and chat, voice and reactions stay here.
+            </p>
+            <div className="mt-5 flex flex-wrap justify-center gap-2">
+              <a href={url} target="_blank" rel="noopener noreferrer" className="btn-primary px-4 py-2 text-sm">Open on {streamingService(url)}</a>
+              <a href={EXTENSION_HELP_URL} target="_blank" rel="noopener noreferrer" className="btn-ghost px-4 py-2 text-sm">Get the extension</a>
+            </div>
+          </div>
+        ) : url ? (
           <Player
             key={url}
             ref={playerRef}
@@ -792,7 +807,7 @@ const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(({ roomId, isFu
             <p className="mt-1 text-sm">{isHost ? "Hover here and paste a video link to get started." : "Grab a snack — it'll start for everyone at once."}</p>
           </div>
         )}
-        {url && subtitles && showSubtitles && (
+        {url && !streamingService(url) && subtitles && showSubtitles && (
           <SubtitleOverlay vtt={subtitles.vtt} getCurrentTime={readCurrentTime} isFullscreen={isFullscreen} />
         )}
       </div>

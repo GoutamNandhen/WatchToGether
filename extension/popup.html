@@ -1,0 +1,33 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<style>
+  body { margin: 0; width: 320px; font: 14px/1.45 system-ui, sans-serif; color: #e2e8f0; background: #0b0b1a; }
+  .wrap { padding: 16px; background: radial-gradient(120% 80% at 0% 0%, rgba(99,102,241,.25), transparent 60%), radial-gradient(100% 70% at 100% 100%, rgba(217,70,239,.18), transparent 60%); }
+  h1 { margin: 0 0 4px; font-size: 16px; font-weight: 700; background: linear-gradient(90deg, #a5b4fc, #e879f9); -webkit-background-clip: text; color: transparent; }
+  p { margin: 0 0 12px; color: #94a3b8; font-size: 13px; }
+  .card { border: 1px solid rgba(255,255,255,.1); background: rgba(255,255,255,.04); border-radius: 12px; padding: 12px; margin-bottom: 12px; }
+  .row { display: flex; justify-content: space-between; gap: 8px; font-size: 13px; }
+  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; background: #64748b; }
+  .on { background: #34d399; } .warn { background: #fbbf24; }
+  button { width: 100%; border: 0; border-radius: 10px; padding: 10px; font: 600 14px system-ui; color: #fff; cursor: pointer; background: linear-gradient(135deg, #6366f1, #8b5cf6); }
+  button.ghost { background: rgba(255,255,255,.06); color: #cbd5e1; margin-top: 8px; }
+  button:disabled { opacity: .5; cursor: default; }
+  .err { color: #fca5a5; font-size: 12px; margin-top: 8px; }
+  .muted { color: #64748b; font-size: 12px; margin-top: 10px; }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>WatchTogether Sync</h1>
+    <p id="intro">Everyone plays the title on their own account. We keep you all on the same second.</p>
+    <div class="card" id="status"></div>
+    <button id="link">Link this tab to my room</button>
+    <button id="unlink" class="ghost" hidden>Unlink</button>
+    <div class="err" id="error"></div>
+    <div class="muted">Open your room on WatchTogether in another tab, start the same title here, then link. The host's play, pause and seek control everyone.</div>
+  </div>
+  <script src="popup.js"></script>
+</body>
+</html>

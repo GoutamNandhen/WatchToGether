@@ -1,0 +1,43 @@
+{
+  "manifest_version": 3,
+  "name": "WatchTogether Sync",
+  "version": "0.1.0",
+  "description": "Watch Netflix, Disney+ Hotstar, Prime Video and more in sync with your WatchTogether room. Everyone uses their own account.",
+  "icons": { "16": "icons/icon16.png", "48": "icons/icon48.png", "128": "icons/icon128.png" },
+  "action": { "default_popup": "popup.html", "default_title": "WatchTogether Sync" },
+  "background": { "service_worker": "background.js" },
+  "permissions": ["storage", "tabs"],
+  "host_permissions": [
+    "https://watchtogether-api.onrender.com/*",
+    "https://watch-to-gether.vercel.app/*",
+    "http://localhost:5173/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": ["https://watch-to-gether.vercel.app/*", "http://localhost:5173/*"],
+      "js": ["bridge.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://www.netflix.com/*",
+        "https://www.hotstar.com/*",
+        "https://www.primevideo.com/*",
+        "https://www.amazon.in/*",
+        "https://www.amazon.com/*",
+        "https://www.sonyliv.com/*",
+        "https://www.zee5.com/*",
+        "https://www.jiocinema.com/*",
+        "https://www.youtube.com/*"
+      ],
+      "js": ["player.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://www.netflix.com/*"],
+      "js": ["netflix-main.js"],
+      "run_at": "document_idle",
+      "world": "MAIN"
+    }
+  ]
+}
