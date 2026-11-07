@@ -1,3 +1,4 @@
+import { captureError } from "./infra/monitoring";
 import express from "express";
 import { execSync } from "child_process";
 import cors from "cors";
@@ -95,6 +96,19 @@ export const createApp = (options: { gracePeriodMs?: number; redis?: { pub: Redi
 
   app.get("/", (req, res) => {
     res.send("CineSync API");
+  });
+
+  // Last-resort handler: report unexpected errors and answer with a plain 500.
+  app.use((err: unknown, req: express.Request, res: express.Response, next: express.NextFunction) => {
+    if (res.headersSent) return next(err);
+    const status = (err as { status?: number })?.status;
+    if (status && status < 500) {
+      res.status(status).json({ message: (err as Error).message || "Bad request" });
+      return;
+    }
+    console.error("Unhandled route error:", err);
+    captureError(err, { method: req.method, path: req.path });
+    res.status(500).json({ message: "Something went wrong" });
   });
 
   const roomManager: RoomManager = setupSocketHandlers(io, options.gracePeriodMs);

@@ -10,3 +10,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - run: curl -fsS --max-time 60 https://watchtogether-api.onrender.com/api/health || true
+# GitHub can delay or skip scheduled runs by 10-30 min, so this alone won't stop every cold start.
+# For a reliable fix, add a free external monitor (cron-job.org or UptimeRobot) hitting
+# https://watchtogether-api.onrender.com/api/health every 5 minutes.
